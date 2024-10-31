@@ -77,7 +77,7 @@ const RoomPage = () => {
 
     // Socket initialization
     useEffect(() => {
-      const newSocket = io('http://localhost:3000');
+      const newSocket = io(import.meta.env.VITE_API_URL);
       setSocket(newSocket);
       return () => newSocket.disconnect();
     }, []);
@@ -341,7 +341,7 @@ useEffect(() => {
   const handleAnalyzeCode = async () => {
     setIsAnalyzing(true);
     try {
-      const response = await fetch('http://localhost:3000/api/analyze', {
+      const response = await fetch('https://hirebytes.onrender.com/api/analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
