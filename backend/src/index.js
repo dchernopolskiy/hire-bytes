@@ -350,6 +350,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/interview
   process.exit(1);
 });
 
+app.get('/keepalive', (_, res) => res.sendStatus(200));
+
 // Error handling
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);

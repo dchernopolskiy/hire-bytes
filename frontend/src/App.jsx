@@ -15,4 +15,18 @@ function App() {
   );
 }
 
+useEffect(() => {
+  const keepAlive = () => {
+    fetch(`${import.meta.env.VITE_API_URL}/keepalive`)
+      .catch(() => {}); // ignore any errors
+  };
+
+  // Initial ping when app loads
+  keepAlive();
+  
+  // Then ping every 14 minutes
+  const interval = setInterval(keepAlive, 14 * 60 * 1000);
+  return () => clearInterval(interval);
+}, []);
+
 export default App;
