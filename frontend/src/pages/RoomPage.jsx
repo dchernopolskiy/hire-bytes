@@ -464,7 +464,7 @@ const RemoteCursor = ({ position, username }) => {
           backgroundColor: cursorColor,
           boxShadow: `0 0 2px ${cursorColor}`
         }} 
-      />sss
+      />
       <span 
         className="px-1.5 py-0.5 text-xs rounded whitespace-nowrap text-white absolute left-0 -top-6"
         style={{ 

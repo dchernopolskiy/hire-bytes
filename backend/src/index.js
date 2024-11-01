@@ -10,6 +10,7 @@ require('dotenv').config();
 
 const Room = require('./models/room');
 const User = require('./models/user');
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 console.log('Starting server initialization...');
 
@@ -52,68 +53,65 @@ app.use((req, res, next) => {
   next();
 });
 
+// Mount analytics routes
+app.use('/api/analytics', analyticsRoutes);
+
 // Socket.IO event handlers
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-socket.on('join_room', async ({ roomId, userId, username, isCreator }) => {
-  try {
-    let room = await Room.findOne({ roomId });
-    if (!room) {
-      socket.emit('error', { message: 'Room not found' });
-      return;
-    }
-
-    // Check for existing user with same username
-    const existingUser = room.participants.find(p => 
-      p.username.toLowerCase() === username.toLowerCase() && p.userId !== userId
-    );
-    
-    if (existingUser) {
-      // Append number to username if it exists
-      let counter = 1;
-      let newUsername = username;
-      while (room.participants.some(p => p.username.toLowerCase() === newUsername.toLowerCase())) {
-        newUsername = `${username} (${counter})`;
-        counter++;
+  socket.on('join_room', async ({ roomId, userId, username, isCreator }) => {
+    try {
+      let room = await Room.findOne({ roomId });
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
       }
-      username = newUsername;
-    }
 
-    // Update participant
-    const participantIndex = room.participants.findIndex(p => p.userId === userId);
-    if (participantIndex === -1) {
-      room.participants.push({
-        userId,
-        username,
-        joinedAt: new Date()
+      // Check for existing user with same username
+      const existingUser = room.participants.find(p => 
+        p.username.toLowerCase() === username.toLowerCase() && p.userId !== userId
+      );
+      
+      if (existingUser) {
+        let counter = 1;
+        let newUsername = username;
+        while (room.participants.some(p => p.username.toLowerCase() === newUsername.toLowerCase())) {
+          newUsername = `${username} (${counter})`;
+          counter++;
+        }
+        username = newUsername;
+      }
+
+      // Update participant
+      const participantIndex = room.participants.findIndex(p => p.userId === userId);
+      if (participantIndex === -1) {
+        room.participants.push({
+          userId,
+          username,
+          joinedAt: new Date()
+        });
+      } else {
+        room.participants[participantIndex].username = username;
+        room.participants[participantIndex].joinedAt = new Date();
+      }
+      
+      await room.save();
+
+      socket.join(roomId);
+      socket.to(roomId).emit('user_joined', { userId, username });
+      
+      socket.emit('room_state', {
+        code: room.content,
+        language: room.language,
+        participants: room.participants
       });
-    } else {
-      room.participants[participantIndex].username = username;
-      room.participants[participantIndex].joinedAt = new Date();
+
+    } catch (error) {
+      console.error('Error joining room:', error);
+      socket.emit('error', { message: 'Failed to join room' });
     }
-    
-    await room.save();
-
-    // Join the Socket.IO room
-    socket.join(roomId);
-    
-    // Notify others in the room
-    socket.to(roomId).emit('user_joined', { userId, username });
-    
-    // Send current room state to the joining user
-    socket.emit('room_state', {
-      code: room.content,
-      language: room.language,
-      participants: room.participants
-    });
-
-  } catch (error) {
-    console.error('Error joining room:', error);
-    socket.emit('error', { message: 'Failed to join room' });
-  }
-});
-
+  });
 
   socket.on('code_change', async ({ roomId, code }) => {
     try {
@@ -131,29 +129,24 @@ socket.on('join_room', async ({ roomId, userId, username, isCreator }) => {
   });
 
   socket.on('cursor_move', ({ roomId, userId, username, position }) => {
-    console.log('Cursor moved:', { userId, username, position });
     socket.to(roomId).emit('cursor_update', { userId, username, position });
   });
 
   socket.on('mute_user', ({ roomId, userId }) => {
-    console.log('Muting user:', userId);
     io.to(roomId).emit('user_muted', userId);
   });
 
   socket.on('unmute_user', ({ roomId, userId }) => {
-    console.log('Unmuting user:', userId);
     io.to(roomId).emit('user_unmuted', userId);
   });
 
   socket.on('kick_user', async ({ roomId, userId }) => {
-    console.log('Kicking user:', userId);
-      await Room.findOneAndUpdate(
+    await Room.findOneAndUpdate(
       { roomId },
       { $pull: { participants: { userId } } }
     );
     
     io.to(roomId).emit('kicked', userId);
-
     const userSocket = Array.from(io.sockets.sockets.values())
       .find(s => s.userId === userId);
     if (userSocket) {
@@ -162,11 +155,9 @@ socket.on('join_room', async ({ roomId, userId, username, isCreator }) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id, socket.userId);
-    // Notify rooms this user was in
     if (socket.userId) {
       socket.rooms.forEach(roomId => {
-        if (roomId !== socket.id) { // socket.id is also in rooms
+        if (roomId !== socket.id) {
           socket.to(roomId).emit('user_left', socket.userId);
         }
       });
@@ -188,7 +179,6 @@ app.post('/api/rooms', async (req, res) => {
     const roomId = uuidv4();
     const userId = uuidv4();
 
-    // Create or update user
     let user = await User.findOne({ username });
     
     if (!user) {
@@ -203,7 +193,6 @@ app.post('/api/rooms', async (req, res) => {
     
     await user.save();
 
-    // Create room
     const room = new Room({
       roomId,
       creatorId: user.userId,
@@ -233,6 +222,7 @@ app.post('/api/rooms', async (req, res) => {
   }
 });
 
+// Code analysis endpoint
 app.post('/api/analyze', async (req, res) => {
   console.log('\n=== Starting Code Analysis ===');
   const { code, language } = req.body;
@@ -242,7 +232,6 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
-    console.log('Initializing Gemini model...');
     const model = genAI.getGenerativeModel({ 
       model: "gemini-pro",
       safetySettings: [
@@ -280,23 +269,17 @@ app.post('/api/analyze', async (req, res) => {
       Provide a concise, bullet-point analysis focusing on the most important aspects.
     `;
 
-    console.log('Sending request to Gemini API...');
     const result = await model.generateContent(analysisPrompt);
-    console.log('Response received from Gemini API');
-
+    
     if (!result.response) {
       throw new Error('No response from Gemini API');
     }
 
     const analysis = result.response.text();
-    console.log('Analysis complete');
-
     res.json({ analysis });
 
   } catch (error) {
     console.error('Analysis error:', error);
-
-    // Handle specific error cases
     if (error.message?.includes('quota') || error.message?.includes('rate')) {
       return res.status(429).json({
         error: 'Rate limit exceeded',
@@ -319,14 +302,17 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    socketio: io ? 'initialized' : 'not initialized'
-  });
+// Analytics error handling middleware
+app.use((err, req, res, next) => {
+  if (req.path.startsWith('/api/analytics')) {
+    console.error('Analytics Error:', err);
+    res.status(500).json({
+      error: 'Analytics service error',
+      message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
+    });
+    return;
+  }
+  next(err);
 });
 
 // Connect to MongoDB and start server
