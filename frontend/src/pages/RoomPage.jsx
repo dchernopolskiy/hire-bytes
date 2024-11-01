@@ -528,51 +528,16 @@ const RemoteCursor = ({ position, username }) => {
 };
 
 // AnalysisPanel component
-  const AnalysisPanel = ({ 
-    isAnalyzing, 
-    handleAnalyzeCode, 
-    analysis, 
-    showAnalysisPanel, 
-    setShowAnalysisPanel,
-    notes,
-    setNotes,
-    setNotifications
-  }) => {
-  const textareaRef = useRef(null);
-  const copyNotes = () => {
-    navigator.clipboard.writeText(notes);
-    setNotifications(prev => [...prev, { 
-      id: Date.now(), 
-      message: 'Notes copied to clipboard', 
-      type: 'success' 
-    }]);
-  };
-
-  const insertBulletPoint = () => {
-    const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const beforeCursor = notes.substr(0, start);
-    const afterCursor = notes.substr(start);
-    const newText = `${beforeCursor}• ${afterCursor}`;
-    setNotes(newText);
-    textarea.focus();
-  };
-
-  const toggleBold = () => {
-    const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = notes.substring(start, end);
-    
-    if (selectedText) {
-      const beforeSelection = notes.substring(0, start);
-      const afterSelection = notes.substring(end);
-      const newText = `${beforeSelection}**${selectedText}**${afterSelection}`;
-      setNotes(newText);
-      textarea.focus();
-    }
-  };
-
+const AnalysisPanel = ({ 
+  isAnalyzing, 
+  handleAnalyzeCode, 
+  analysis, 
+  showAnalysisPanel, 
+  setShowAnalysisPanel,
+  notes,
+  setNotes,
+  setNotifications
+}) => {
   return (
     <div className="w-80 border-l border-gray-700 flex flex-col bg-gray-900">
       <div className="p-4 border-b border-gray-700">
@@ -624,38 +589,26 @@ const RemoteCursor = ({ position, username }) => {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium text-gray-400">Interview Notes</h3>
-            <div className="flex gap-2">
-              <button
-                onClick={insertBulletPoint}
-                className="p-1.5 bg-gray-700 hover:bg-gray-600 rounded text-gray-300"
-                title="Add bullet point"
-              >
-                •
-              </button>
-              <button
-                onClick={toggleBold}
-                className="p-1.5 px-2 bg-gray-700 hover:bg-gray-600 rounded font-bold text-gray-300"
-                title="Bold text"
-              >
-                B
-              </button>
-            </div>
           </div>
           
           <textarea
-            ref={textareaRef}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Take notes during the interview...
-- Use bullet points
-- Use **bold** text for emphasis"
+            placeholder="Take notes during the interview..."
             className="w-full h-64 px-3 py-2 bg-gray-800 border border-gray-700 rounded-md
               focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
               placeholder:text-gray-600 text-sm font-mono"
           />
 
           <button
-            onClick={copyNotes}
+            onClick={() => {
+              navigator.clipboard.writeText(notes);
+              setNotifications(prev => [...prev, { 
+                id: Date.now(), 
+                message: 'Notes copied to clipboard', 
+                type: 'success' 
+              }]);
+            }}
             className="w-full py-2 bg-gray-700 hover:bg-gray-600 rounded-md
               transition-colors text-sm flex items-center justify-center gap-2"
           >
