@@ -61,6 +61,20 @@ const RoomPage = () => {
     });
   }, [selections]);
 
+  const highlightExtension = useMemo(() => {
+  return EditorView.decorations.of((view) => {
+    let decorations = [];
+    activeHighlights.forEach(({ selection, color }) => {
+      decorations.push(Decoration.mark({
+        attributes: {
+          style: `background-color: ${color}33; border-bottom: 2px solid ${color};`
+        }
+      }).range(selection.from, selection.to));
+    });
+    return Decoration.set(decorations);
+  });
+}, [activeHighlights]);
+
       // notification helper
       const addNotification = useCallback((message, type) => {
       const id = Date.now();
@@ -706,7 +720,8 @@ const RemoteCursor = ({ position, username }) => {
               theme={vscodeDark}
               extensions={[
                 getLanguageExtension(language),
-                highlightExtension
+                highlightExtension,
+                selectionHighlights
               ]}
               onChange={handleCodeChange}
               editable={!isUserMuted}
