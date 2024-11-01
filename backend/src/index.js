@@ -20,7 +20,9 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  'https://hirebytes.netlify.app'
+  'https://hirebytes.netlify.app',
+  'https://hire-bytes.pro',
+  'http://hire-bytes.pro'
 ];
 
 const io = new Server(server, {
