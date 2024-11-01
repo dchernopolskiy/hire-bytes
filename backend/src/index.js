@@ -128,6 +128,21 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('language_change', async ({ roomId, language }) => {
+  try {
+    await Room.findOneAndUpdate(
+      { roomId },
+      { 
+        language,
+        lastActive: new Date()
+      }
+    );
+    socket.to(roomId).emit('language_changed', language);
+  } catch (error) {
+    console.error('Error updating language:', error);
+  }
+});
+
   socket.on('cursor_move', ({ roomId, userId, username, position }) => {
     socket.to(roomId).emit('cursor_update', { userId, username, position });
   });

@@ -43,6 +43,7 @@ const RoomPage = () => {
   const CURSOR_TIMEOUT = 60000; // 1 minute for cursor disappearance
   const [sharedSelection, setSharedSelection] = useState(null);
   const [selections, setSelections] = useState(new Map());
+  const [activeHighlights, setActiveHighlights] = useState(new Map());
 
   const selectionHighlights = useMemo(() => {
     return EditorView.decorations.of((view) => {
@@ -106,6 +107,11 @@ const RoomPage = () => {
       }
     });
 
+    socket.on('language_changed', (newLanguage) => {
+      console.log('Language changed:', newLanguage);
+      setLanguage(newLanguage);
+    });
+
     // Handle user mute events
     socket.on('user_muted', (userId) => {
       if (userId === localStorage.getItem('userId')) {
@@ -128,6 +134,20 @@ const RoomPage = () => {
       });
     });
 
+    socket.on('code_selection_update', ({ userId, username, selection }) => {
+      if (userId !== localStorage.getItem('userId')) {
+        setActiveHighlights(prev => {
+          const newHighlights = new Map(prev);
+          newHighlights.set(userId, {
+            username,
+            selection,
+            color: stringToColor(username)
+          });
+          return newHighlights;
+        });
+      }
+    });
+
     // Handle kick events
     socket.on('kicked', (userId) => {
       if (userId === localStorage.getItem('userId')) {
@@ -144,15 +164,18 @@ const RoomPage = () => {
       if (userId !== localStorage.getItem('userId')) {
         setSelections(prev => {
           const newSelections = new Map(prev);
-          if (selection.from === selection.to) {
-            // If it's just a cursor position, remove the highlight
-            newSelections.delete(userId);
-          } else {
-            // If there's a selection, add it
-            newSelections.set(userId, { username, selection });
-          }
+          newSelections.set(userId, { username, selection });
           return newSelections;
         });
+
+        // Clear the selection after a delay (optional)
+        setTimeout(() => {
+          setSelections(prev => {
+            const newSelections = new Map(prev);
+            newSelections.delete(userId);
+            return newSelections;
+          });
+        }, 5000); // Adjust this timeout as needed
       }
     });
 
@@ -232,12 +255,15 @@ const RoomPage = () => {
   }, [socket, roomId, isUserMuted]);
 
   // Handle language changes
-  const handleLanguageChange = useCallback((newLanguage) => {
-    setLanguage(newLanguage);
-    if (!code || code === getDefaultTemplate(language)) {
-      setCode(getDefaultTemplate(newLanguage));
-    }
-  }, [code, language]);
+const handleLanguageChange = useCallback((newLanguage) => {
+  setLanguage(newLanguage);
+  if (socket) {
+    socket.emit('language_change', { roomId, language: newLanguage });
+  }
+  if (!code || code === getDefaultTemplate(language)) {
+    setCode(getDefaultTemplate(newLanguage));
+  }
+}, [socket, code, language, roomId]);
 
   // Handle cursor updates
 const handleCursorUpdate = useCallback((view) => {
@@ -297,29 +323,38 @@ useEffect(() => {
   return () => clearInterval(interval);
 }, [lastCursorActivity]);
 
+  // highlighting the code
   const handleSelection = useCallback((viewUpdate) => {
-    if (!socket) return;
+    if (!socket || !viewUpdate.view) return;
     
-    const { from, to } = viewUpdate.state.selection.main;
-    // Always emit the selection update, not just for non-empty selections
-    socket.emit('selection_update', {
+    const selection = viewUpdate.state.selection.main;
+    if (selection.from === selection.to) return; // Skip if no selection
+    
+    // Get the selected text
+    const selectedText = viewUpdate.state.doc.sliceString(selection.from, selection.to);
+    
+    socket.emit('code_selection', {
       roomId,
       userId: localStorage.getItem('userId'),
       username: localStorage.getItem('username'),
-      selection: { from, to }
+      selection: {
+        from: selection.from,
+        to: selection.to,
+        text: selectedText
+      }
     });
 
     // Update local selections state
     setSelections(prev => {
       const newSelections = new Map(prev);
-      if (from === to) {
+      if (selection.from === selection.to) {
         // Clear selection when there's no active selection
         newSelections.delete(localStorage.getItem('userId'));
       } else {
         // Update selection when text is selected
         newSelections.set(localStorage.getItem('userId'), {
           username: localStorage.getItem('username'),
-          selection: { from, to }
+          selection: { from: selection.from, to: selection.to }
         });
       }
       return newSelections;
@@ -597,7 +632,6 @@ const RemoteCursor = ({ position, username }) => {
             ref={textareaRef}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            onFocus={(e) => e.preventDefault()}
             placeholder="Take notes during the interview...
 - Use bullet points
 - Use **bold** text for emphasis"
@@ -666,24 +700,24 @@ const RemoteCursor = ({ position, username }) => {
           
           {/* Editor with cursor tracking */}
           <div className="flex-1 overflow-hidden relative">
-          <CodeMirror
-            value={code}
-            height="100%"
-            theme={vscodeDark}
-            extensions={[
-              getLanguageExtension(language),
-              selectionHighlights  // Add this
-            ]}
-            onChange={handleCodeChange}
-            editable={!isUserMuted}
-            onUpdate={(viewUpdate) => {
-              if (viewUpdate.selectionSet) {
-                handleCursorUpdate(viewUpdate.view);
-                handleSelection(viewUpdate);
-              }
-            }}
-            className="h-full"
-            basicSetup={{
+            <CodeMirror
+              value={code}
+              height="100%"
+              theme={vscodeDark}
+              extensions={[
+                getLanguageExtension(language),
+                highlightExtension
+              ]}
+              onChange={handleCodeChange}
+              editable={!isUserMuted}
+              onUpdate={(viewUpdate) => {
+                if (viewUpdate.selectionSet) {
+                  handleCursorUpdate(viewUpdate.view);
+                  handleSelection(viewUpdate);
+                }
+              }}
+              className="h-full"
+              basicSetup={{
               lineNumbers: true,
               highlightActiveLineGutter: true,
               highlightSpecialChars: true,
