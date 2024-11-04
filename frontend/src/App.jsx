@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import RoomPage from './pages/RoomPage';
 import AnalyticsDashboard from './pages/AnalyticsDashboard';
+import { FeedbackButton } from './components/FeedbackButton';
 
 function App() {
   // Move useEffect inside the component
@@ -27,6 +28,7 @@ function App() {
         <Route path="/room/:roomId" element={<RoomPage />} />
         <Route path="/analytics" element={<AnalyticsDashboard />} />
       </Routes>
+      <FeedbackButton />
     </Router>
   );
 }

@@ -275,6 +275,7 @@ app.post('/api/analyze', async (req, res) => {
       2. Potential bugs or issues
       3. Time and space complexity (if applicable)
       4. Suggestions for improvement
+      5. Ask follow up questions
       
       Code to analyze:
       \`\`\`${language}
@@ -351,6 +352,9 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/interview
 });
 
 app.get('/keepalive', (_, res) => res.sendStatus(200));
+
+const feedbackRoutes = require('./routes/feedbackRoutes');
+app.use('/api/feedback', feedbackRoutes);
 
 // Error handling
 process.on('uncaughtException', (err) => {

@@ -2,3 +2,10 @@
 /backend/node_modules
 backend/.env
 /node_modules
+frontend/.env.production
+frontend/.env.production
+*.production
+frontend/.env.production
+frontend/.env.production
+frontend/.env.production
+frontend/.env.production
