@@ -49,12 +49,38 @@ export default function AnalyticsDashboard() {
     }
   };
 
-  useEffect(() => {
-    fetchData();
-    // Refresh every 5 minutes
-    const interval = setInterval(fetchData, 300000);
-    return () => clearInterval(interval);
-  }, [timeRange]);
+useEffect(() => {
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      console.log('Fetching analytics data...');
+      console.log('API URL:', `${import.meta.env.VITE_API_URL}/api/analytics/dashboard?range=${timeRange}`);
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/analytics/dashboard?range=${timeRange}`);
+      console.log('Response status:', response.status);
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Analytics fetch error:', errorData);
+        throw new Error('Failed to fetch analytics');
+      }
+      
+      const result = await response.json();
+      console.log('Analytics data received:', result);
+      setData(result);
+    } catch (err) {
+      console.error('Analytics error details:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  fetchData();
+  // Refresh every 5 minutes
+  const interval = setInterval(fetchData, 300000);
+  return () => clearInterval(interval);
+}, [timeRange]);
 
   if (error) {
     return (
