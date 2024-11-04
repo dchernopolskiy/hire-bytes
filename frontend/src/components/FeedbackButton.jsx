@@ -91,11 +91,11 @@ export const FeedbackButton = ({ className = '' }) => {
                         key={value}
                         type="button"
                         onClick={() => setRating(value)}
-                        className={`w-10 h-10 rounded-full ${
-                          rating >= value
+                        className={`w-12 h-12 rounded-full flex items-center justify-center
+                          ${rating >= value
                             ? 'bg-blue-500 text-white'
                             : 'bg-gray-700 text-gray-400'
-                        }`}
+                          } hover:bg-blue-600 transition-colors`}
                       >
                         {value}
                       </button>

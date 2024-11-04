@@ -37,6 +37,23 @@ const io = new Server(server, {
 // Initialize Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 
+// Add tracking
+const trackAnalytics = async (eventName, properties = {}) => {
+  try {
+    const event = {
+      eventName,
+      timestamp: new Date(),
+      properties,
+      origin: 'server'
+    };
+    
+    await AnalyticsEvent.create(event);
+    console.log(`Analytics event tracked: ${eventName}`, properties);
+  } catch (error) {
+    console.error('Failed to track analytics:', error);
+  }
+};
+
 // Set up CORS
 app.use(cors({
   origin: allowedOrigins,
@@ -107,6 +124,13 @@ io.on('connection', (socket) => {
         participants: room.participants
       });
 
+      await trackAnalytics('room_joined', {
+        roomId,
+        userId,
+        username,
+        isCreator
+      });
+
     } catch (error) {
       console.error('Error joining room:', error);
       socket.emit('error', { message: 'Failed to join room' });
@@ -117,31 +141,39 @@ io.on('connection', (socket) => {
     try {
       await Room.findOneAndUpdate(
         { roomId },
-        { 
-          content: code,
-          lastActive: new Date()
-        }
+        { content: code, lastActive: new Date() }
       );
       socket.to(roomId).emit('receive_code', code);
+      
+      await trackAnalytics('code_changed', {
+        roomId,
+        userId: socket.userId,
+        codeLength: code.length,
+        language: (await Room.findOne({ roomId }))?.language || 'unknown'
+      });
     } catch (error) {
       console.error('Error updating code:', error);
     }
   });
 
-  socket.on('language_change', async ({ roomId, language }) => {
-  try {
-    await Room.findOneAndUpdate(
-      { roomId },
-      { 
-        language,
-        lastActive: new Date()
-      }
-    );
-    socket.to(roomId).emit('language_changed', language);
-  } catch (error) {
-    console.error('Error updating language:', error);
-  }
-});
+  socket.on('code_change', async ({ roomId, code }) => {
+    try {
+      await Room.findOneAndUpdate(
+        { roomId },
+        { content: code, lastActive: new Date() }
+      );
+      socket.to(roomId).emit('receive_code', code);
+      
+      await trackAnalytics('code_changed', {
+        roomId,
+        userId: socket.userId,
+        codeLength: code.length,
+        language: (await Room.findOne({ roomId }))?.language || 'unknown'
+      });
+    } catch (error) {
+      console.error('Error updating code:', error);
+    }
+  });
 
   socket.on('cursor_move', ({ roomId, userId, username, position }) => {
     socket.to(roomId).emit('cursor_update', { userId, username, position });
@@ -221,19 +253,22 @@ app.post('/api/rooms', async (req, res) => {
 
     await room.save();
 
+    await trackAnalytics('room_created', {
+      roomId,
+      userId: user.userId,
+      username: user.username,
+      timestamp: new Date()
+    });
+
     res.status(201).json({
       roomId,
       userId: user.userId,
       username: user.username,
       creatorId: user.userId
     });
-
   } catch (error) {
     console.error('Room creation error:', error);
-    res.status(500).json({ 
-      error: 'Failed to create room',
-      details: error.message 
-    });
+    res.status(500).json({ error: 'Failed to create room' });
   }
 });
 
@@ -275,7 +310,7 @@ app.post('/api/analyze', async (req, res) => {
       2. Potential bugs or issues
       3. Time and space complexity (if applicable)
       4. Suggestions for improvement
-      5. Ask follow up questions
+      5. Ask follow up questions  
       
       Code to analyze:
       \`\`\`${language}
@@ -294,13 +329,20 @@ app.post('/api/analyze', async (req, res) => {
     const analysis = result.response.text();
     res.json({ analysis });
 
-  } catch (error) {
-    console.error('Analysis error:', error);
-    if (error.message?.includes('quota') || error.message?.includes('rate')) {
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        message: 'Too many requests. Please wait a moment before trying again.',
-        retryAfter: 60
+      await trackAnalytics('code_analyzed', {
+        language,
+        codeLength: code.length,
+        analysisTime: Date.now() - startTime,
+        success: true
+      });
+
+      res.json({ analysis });
+    } catch (error) {
+      await trackAnalytics('code_analysis_failed', {
+        language,
+        codeLength: code.length,
+        error: error.message,
+        analysisTime: Date.now() - startTime
       });
     }
 
