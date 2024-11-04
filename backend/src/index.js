@@ -326,23 +326,22 @@ app.post('/api/analyze', async (req, res) => {
       throw new Error('No response from Gemini API');
     }
 
+    await trackAnalytics('code_analyzed', {
+      language,
+      codeLength: code.length,
+      analysisTime: Date.now() - startTime,
+      success: true
+    });
     const analysis = result.response.text();
     res.json({ analysis });
 
-      await trackAnalytics('code_analyzed', {
-        language,
-        codeLength: code.length,
-        analysisTime: Date.now() - startTime,
-        success: true
-      });
-
-      res.json({ analysis });
-    } catch (error) {
-      await trackAnalytics('code_analysis_failed', {
-        language,
-        codeLength: code.length,
-        error: error.message,
-        analysisTime: Date.now() - startTime
+  } catch (error) {
+    console.error('Analysis error:', error);
+    if (error.message?.includes('quota') || error.message?.includes('rate')) {
+      return res.status(429).json({
+        error: 'Rate limit exceeded',
+        message: 'Too many requests. Please wait a moment before trying again.',
+        retryAfter: 60
       });
     }
 
