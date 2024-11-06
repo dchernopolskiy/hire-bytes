@@ -23,7 +23,6 @@ export const FeedbackButton = ({ className = '' }) => {
         body: JSON.stringify({
           rating,
           feedback,
-          timestamp: new Date().toISOString(),
           userId: localStorage.getItem('userId'),
           username: localStorage.getItem('username'),
         }),
@@ -36,13 +35,14 @@ export const FeedbackButton = ({ className = '' }) => {
       setSubmitted(true);
       setTimeout(() => {
         setShowModal(false);
-        // Reset state after closing
+        // Reset form after successful submission
         setRating(0);
         setFeedback('');
         setSubmitted(false);
       }, 2000);
 
     } catch (err) {
+      console.error('Feedback error:', err);
       setError('Failed to submit feedback. Please try again.');
     } finally {
       setIsSubmitting(false);

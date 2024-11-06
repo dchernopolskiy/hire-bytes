@@ -115,8 +115,8 @@ router.get('/dashboard', async (req, res) => {
       }
     ]);
 
-    // Get hourly activity
-    const hourlyActivity = await AnalyticsEvent.aggregate([
+    // Get daily activity
+    const dailyActivity = await AnalyticsEvent.aggregate([
       {
         $match: {
           timestamp: { $gte: start, $lte: end }
@@ -124,7 +124,12 @@ router.get('/dashboard', async (req, res) => {
       },
       {
         $group: {
-          _id: { $hour: '$timestamp' },
+          _id: {
+            $dateToString: { 
+              format: "%Y-%m-%d", 
+              date: "$timestamp"
+            }
+          },
           sessions: { $sum: 1 }
         }
       },
@@ -134,7 +139,7 @@ router.get('/dashboard', async (req, res) => {
       {
         $project: {
           _id: 0,
-          hour: '$_id',
+          date: '$_id',
           sessions: 1
         }
       }
@@ -150,10 +155,12 @@ router.get('/dashboard', async (req, res) => {
     .then(events => events.map(event => ({
       id: event._id.toString(),
       type: event.eventName,
-      description: `${event.eventName.replace(/_/g, ' ')} by ${event.userId}`,
+      userId: event.userId,
+      username: event.username,
       timestamp: event.timestamp.toISOString()
     })));
 
+    // Send response
     res.json({
       overview: {
         totalRooms,
@@ -163,7 +170,7 @@ router.get('/dashboard', async (req, res) => {
       },
       trends,
       languages,
-      hourlyActivity,
+      dailyActivity,
       recentActivity
     });
 

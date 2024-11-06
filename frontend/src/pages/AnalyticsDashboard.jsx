@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Calendar, Clock, Users, Code2, Brain, ArrowUp, ArrowDown, Loader2 } from 'lucide-react';
+import { Calendar, Clock, Users, Code2, Brain, Loader2 } from 'lucide-react';
 
 // Color palette for charts
 const colors = {
@@ -19,6 +19,27 @@ const formatDuration = (ms) => {
   return `${minutes}m`;
 };
 
+const formatDate = (isoString) => {
+  const date = new Date(isoString);
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+};
+
+const formatActivityDescription = (activity) => {
+  const eventName = activity.type.replace(/_/g, ' ');
+  const username = activity.username || `User ${activity.userId?.substring(0, 6)}`;
+  
+  return {
+    ...activity,
+    description: `${eventName} by ${username}`,
+    formattedTime: formatDate(activity.timestamp)
+  };
+};
+
 export default function AnalyticsDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -32,55 +53,34 @@ export default function AnalyticsDashboard() {
     },
     trends: [],
     languages: [],
-    hourlyActivity: []
+    dailyActivity: [],
+    recentActivity: []
   });
 
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/analytics/dashboard?range=${timeRange}`);
-      if (!response.ok) throw new Error('Failed to fetch analytics');
-      const result = await response.json();
-      setData(result);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-useEffect(() => {
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      console.log('Fetching analytics data...');
-      console.log('API URL:', `${import.meta.env.VITE_API_URL}/api/analytics/dashboard?range=${timeRange}`);
-      
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/analytics/dashboard?range=${timeRange}`);
-      console.log('Response status:', response.status);
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('Analytics fetch error:', errorData);
-        throw new Error('Failed to fetch analytics');
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/analytics/dashboard?range=${timeRange}`);
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch analytics');
+        }
+        
+        const result = await response.json();
+        setData(result);
+      } catch (err) {
+        console.error('Analytics error:', err);
+        setError(err.message);
+      } finally {
+        setLoading(false);
       }
-      
-      const result = await response.json();
-      console.log('Analytics data received:', result);
-      setData(result);
-    } catch (err) {
-      console.error('Analytics error details:', err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
 
-  fetchData();
-  // Refresh every 5 minutes
-  const interval = setInterval(fetchData, 300000);
-  return () => clearInterval(interval);
-}, [timeRange]);
+    fetchData();
+    const interval = setInterval(fetchData, 300000); // Refresh every 5 minutes
+    return () => clearInterval(interval);
+  }, [timeRange]);
 
   if (error) {
     return (
@@ -111,7 +111,7 @@ useEffect(() => {
               <option value="30d">Last 30 Days</option>
             </select>
             <button
-              onClick={fetchData}
+              onClick={() => fetchData()}
               className="p-2 hover:bg-gray-800 rounded-md"
               title="Refresh data"
             >
@@ -225,14 +225,21 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* Hourly Activity */}
+          {/* Daily Activity */}
           <div className="bg-gray-800/50 p-6 rounded-lg border border-gray-700">
-            <h3 className="text-lg font-medium mb-4">Hourly Activity</h3>
+            <h3 className="text-lg font-medium mb-4">Daily Activity</h3>
             <div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.hourlyActivity}>
+                <BarChart data={data.dailyActivity}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="hour" stroke="#9CA3AF" />
+                  <XAxis 
+                    dataKey="date" 
+                    stroke="#9CA3AF"
+                    tickFormatter={(date) => new Date(date).toLocaleDateString('en-US', { 
+                      month: 'short', 
+                      day: 'numeric' 
+                    })}
+                  />
                   <YAxis stroke="#9CA3AF" />
                   <Tooltip
                     contentStyle={{
@@ -240,8 +247,13 @@ useEffect(() => {
                       border: '1px solid #374151',
                       borderRadius: '0.375rem'
                     }}
+                    labelFormatter={(date) => new Date(date).toLocaleDateString('en-US', {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric'
+                    })}
                   />
-                  <Bar dataKey="sessions" fill={colors.secondary} />
+                  <Bar dataKey="sessions" fill="#10b981" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -251,22 +263,25 @@ useEffect(() => {
           <div className="bg-gray-800/50 p-6 rounded-lg border border-gray-700">
             <h3 className="text-lg font-medium mb-4">Recent Activity</h3>
             <div className="space-y-4 max-h-[300px] overflow-y-auto">
-              {data.recentActivity?.map((activity, index) => (
-                <div
-                  key={activity.id}
-                  className="flex items-start gap-4 p-3 rounded-md hover:bg-gray-700/30"
-                >
-                  <div className="p-2 bg-gray-700 rounded">
-                    {activity.type === 'room_created' && <Calendar className="w-4 h-4 text-blue-400" />}
-                    {activity.type === 'code_analyzed' && <Brain className="w-4 h-4 text-orange-400" />}
-                    {activity.type === 'language_changed' && <Code2 className="w-4 h-4 text-green-400" />}
+              {data.recentActivity?.map((activity) => {
+                const formattedActivity = formatActivityDescription(activity);
+                return (
+                  <div
+                    key={activity.id}
+                    className="flex items-start gap-4 p-3 rounded-md hover:bg-gray-700/30"
+                  >
+                    <div className="p-2 bg-gray-700 rounded">
+                      {activity.type === 'room_created' && <Calendar className="w-4 h-4 text-blue-400" />}
+                      {activity.type === 'code_analyzed' && <Brain className="w-4 h-4 text-orange-400" />}
+                      {activity.type === 'language_changed' && <Code2 className="w-4 h-4 text-green-400" />}
+                    </div>
+                    <div>
+                      <p className="text-sm">{formattedActivity.description}</p>
+                      <p className="text-xs text-gray-400">{formattedActivity.formattedTime}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm">{activity.description}</p>
-                    <p className="text-xs text-gray-400">{activity.timestamp}</p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
