@@ -1,19 +1,23 @@
 import { memo, useState } from 'react';
-import { Brain, Book, MessageSquare, X } from 'lucide-react';
+import { Brain, Book, MessageSquare, Code2, X } from 'lucide-react';
+import { ExercisePanel } from './ExercisePanel';
 
 const RightPanel = memo(({ 
   isCreator,
   analysis,
   isAnalyzing,
   handleAnalyzeCode,
-  onClose 
+  onClose,
+  language,
+  onCodeChange
 }) => {
-  const [activeTab, setActiveTab] = useState('analysis');
+  const [activeTab, setActiveTab] = useState(isCreator ? 'analysis' : 'notes');
   const [notes, setNotes] = useState('');
 
   const tabs = [
     { id: 'analysis', label: 'AI Analysis', icon: Brain, creatorOnly: true },
-    { id: 'notes', label: 'Notes', icon: MessageSquare }
+    { id: 'exercises', label: 'Exercises', icon: Code2, creatorOnly: true },
+    { id: 'notes', label: 'Notes', icon: MessageSquare, creatorOnly: false }
   ].filter(tab => !tab.creatorOnly || isCreator);
 
   const copyNotesToClipboard = async () => {
@@ -24,9 +28,16 @@ const RightPanel = memo(({
     }
   };
 
+  const handleExerciseSelect = (exercise, template) => {
+    if (onCodeChange) {
+      onCodeChange(template);
+    }
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'analysis':
+        if (!isCreator) return null;
         return (
           <div className="flex-1 overflow-y-auto p-4">
             <button
@@ -63,6 +74,16 @@ const RightPanel = memo(({
             )}
           </div>
         );
+
+      case 'exercises':
+        if (!isCreator) return null;
+        return (
+          <ExercisePanel 
+            language={language} 
+            onSelectExercise={handleExerciseSelect}
+          />
+        );
+
       case 'notes':
         return (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -83,6 +104,7 @@ const RightPanel = memo(({
             </button>
           </div>
         );
+
       default:
         return null;
     }
@@ -90,28 +112,26 @@ const RightPanel = memo(({
 
   return (
     <div className="w-80 border-l border-gray-700 flex flex-col bg-gray-900">
-      {/* Header with close button */}
       <div className="border-b border-gray-700 p-4 flex justify-end items-center">
         <button
-            onClick={onClose}
-            className="p-1 hover:bg-gray-800 rounded-md text-gray-400 
+          onClick={onClose}
+          className="p-1 hover:bg-gray-800 rounded-md text-gray-400 
             transition-colors"
         >
-            <X className="w-5 h-5" />
+          <X className="w-5 h-5" />
         </button>
       </div>
 
-      {/* Tab Navigation */}
       <div className="flex border-b border-gray-700 bg-gray-900">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3
+            className={`flex-1 min-w-[100px] flex items-center justify-center gap-2 px-4 py-3
               ${activeTab === tab.id 
                 ? 'bg-gray-800 text-white border-b-2 border-blue-500' 
                 : 'text-gray-400 hover:bg-gray-800/50'
-              } transition-colors`}
+              } transition-colors whitespace-nowrap`}
           >
             <tab.icon className="w-5 h-5 flex-shrink-0" />
             <span className="text-sm">{tab.label}</span>
@@ -119,7 +139,6 @@ const RightPanel = memo(({
         ))}
       </div>
 
-      {/* Tab Content */}
       <div className="flex-1 overflow-hidden bg-gray-900">
         {renderTabContent()}
       </div>
