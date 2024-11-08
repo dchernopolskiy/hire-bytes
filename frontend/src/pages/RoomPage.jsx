@@ -1,9 +1,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import { 
-  Users, Brain, Settings, Clock
-} from 'lucide-react';
+import { Users, Brain, Settings, Clock } from 'lucide-react';
 import { languageOptions, getLanguageExtension } from '../pages/languageConfig';
 import { CodeEditor } from '../components/CodeEditor';
 import { ParticipantsList } from '../components/ParticipantsList';
@@ -17,14 +15,14 @@ const RoomHeader = memo(({
   language, 
   onLanguageChange, 
   sessionTime, 
-  participantCount,
-  onParticipantsClick,
+  participants,
+  showParticipants,
+  setShowParticipants,
+  showSettings,
+  setShowSettings,
   onAnalysisPanelToggle,
-  onSettingsClick,
   showAnalysisPanel,
-  isCreator,
-  participantsButtonRef,
-  settingsButtonRef
+  isCreator
 }) => {
   const formatTime = (seconds) => {
     const hrs = Math.floor(seconds / 3600);
@@ -56,12 +54,11 @@ const RoomHeader = memo(({
           </div>
           
           <button
-            ref={participantsButtonRef}
-            onClick={onParticipantsClick}
-            className="flex items-center space-x-2 px-3 py-2 rounded-md hover:bg-gray-700/50"
+            onClick={() => setShowParticipants(!showParticipants)}
+            className="participants-button flex items-center space-x-2 px-3 py-2 rounded-md hover:bg-gray-700/50"
           >
             <Users className="w-5 h-5" />
-            <span>{participantCount}</span>
+            <span>{participants.length}</span>
           </button>
 
           {isCreator && (
@@ -77,9 +74,8 @@ const RoomHeader = memo(({
           )}
 
           <button
-            ref={settingsButtonRef}
-            onClick={onSettingsClick}
-            className="p-2 hover:bg-gray-700/50 rounded-md"
+            onClick={() => setShowSettings(!showSettings)}
+            className="settings-button p-2 hover:bg-gray-700/50 rounded-md"
             title="Settings"
           >
             <Settings className="w-5 h-5" />
@@ -237,6 +233,28 @@ const RoomPage = () => {
       };
     }, [showParticipants, showSettings]);
 
+    // Listen for language change
+    useEffect(() => {
+      if (!socket) return;
+    
+      socket.on('language_changed', (newLanguage) => {
+        console.log('Language changed received:', newLanguage);
+        setLanguage(newLanguage);
+      });
+    
+      return () => {
+        socket.off('language_changed');
+      };
+    }, [socket]);
+    
+    const handleLanguageChange = useCallback((newLang) => {
+      console.log('Requesting language change to:', newLang);
+      socket?.emit('language_change', { 
+        roomId, 
+        language: newLang 
+      });
+    }, [socket, roomId]);
+
   // Timer
   useEffect(() => {
     const timer = setInterval(() => {
@@ -249,11 +267,6 @@ const RoomPage = () => {
   const handleCodeChange = useCallback((newCode) => {
     setCode(newCode);
     socket?.emit('code_change', { roomId, code: newCode });
-  }, [socket, roomId]);
-
-  const handleLanguageChange = useCallback((newLang) => {
-    setLanguage(newLang);
-    socket?.emit('language_change', { roomId, language: newLang });
   }, [socket, roomId]);
 
   const handleCursorActivity = useCallback((cursorInfo) => {
@@ -322,14 +335,14 @@ const RoomPage = () => {
         language={language}
         onLanguageChange={handleLanguageChange}
         sessionTime={sessionTime}
-        participantCount={participants.length}
-        onParticipantsClick={() => setShowParticipants(!showParticipants)}
-        onAnalysisPanelToggle={() => setShowRightPanel(!showRightPanel)}
-        onSettingsClick={() => setShowSettings(!showSettings)}
+        participants={participants}
+        showParticipants={showParticipants}
+        setShowParticipants={setShowParticipants}
+        showSettings={showSettings}
+        setShowSettings={setShowSettings}
+        onAnalysisPanelToggle={() => isCreator && setShowRightPanel(!showRightPanel)}
         showAnalysisPanel={showRightPanel}
         isCreator={isCreator}
-        participantsButtonRef={participantsButtonRef}
-        settingsButtonRef={settingsButtonRef}
       />
 
       <div className="flex-1 flex">
@@ -352,14 +365,16 @@ const RoomPage = () => {
         </div>
         
         {showRightPanel && (
-          <RightPanel
-            isCreator={isCreator}
-            analysis={analysis}
-            isAnalyzing={isAnalyzing}
-            handleAnalyzeCode={handleAnalyzeCode}
-            onClose={() => setShowRightPanel(false)}
-          />
-        )}
+        <RightPanel
+          isCreator={isCreator}
+          analysis={analysis}
+          isAnalyzing={isAnalyzing}
+          handleAnalyzeCode={handleAnalyzeCode}
+          onClose={() => setShowRightPanel(false)}
+          language={language}
+          onCodeChange={handleCodeChange}
+        />
+      )}
       </div>
 
       {showParticipants && (
@@ -374,8 +389,16 @@ const RoomPage = () => {
       )}
 
       {showSettings && (
-        <div className="absolute right-4 top-16 w-64 bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-gray-700 p-4 z-50">
-          <h3 className="text-lg font-medium mb-4">Settings</h3>
+        <div className="settings-panel absolute right-4 top-16 w-64 bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-gray-700 p-4 z-50">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-medium">Settings</h3>
+            <button
+              onClick={() => setShowSettings(false)}
+              className="text-gray-400 hover:text-white"
+            >
+              ×
+            </button>
+          </div>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-2">Theme</label>

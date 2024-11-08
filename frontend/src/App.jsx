@@ -5,6 +5,7 @@ import RoomPage from './pages/RoomPage';
 import AnalyticsDashboard from './pages/AnalyticsDashboard';
 import { FeedbackButton } from './components/FeedbackButton';
 import Background from './components/Background';
+import AdminPage from './pages/AdminPage';
 
 function App() {
   useEffect(() => {
@@ -32,6 +33,7 @@ function App() {
             <Route path="/" element={<LandingPage />} />
             <Route path="/room/:roomId" element={<RoomPage />} />
             <Route path="/analytics" element={<AnalyticsDashboard />} />
+            <Route path="/admin" element={<AdminPage />} />
           </Routes>
           <FeedbackButton />
         </div>

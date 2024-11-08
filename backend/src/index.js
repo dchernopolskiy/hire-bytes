@@ -5,7 +5,14 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const mongoose = require('mongoose');
+const { trackAnalytics } = require('./routes/analyticsService');
 require('dotenv').config();
+
+const adminAuthRoutes = require('./routes/adminAuthRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const feedbackRoutes = require('./routes/feedbackRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,27 +24,6 @@ const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const activeRooms = new Map();
 const feedbackStore = new Map();
 const analyticsEvents = [];
-
-// Analytics tracking function
-const trackAnalytics = (eventName, properties = {}) => {
-  const event = {
-    id: uuidv4(),
-    eventName,
-    timestamp: new Date(),
-    properties,
-    origin: 'server'
-  };
-  
-  analyticsEvents.push(event);
-  console.log(`Analytics event tracked: ${eventName}`, properties);
-  
-  // Keep only last 1000 events to prevent memory issues
-  if (analyticsEvents.length > 1000) {
-    analyticsEvents.shift();
-  }
-  
-  return event;
-};
 
 // Initialize Socket.IO with CORS options
 const allowedOrigins = [
@@ -60,11 +46,38 @@ const io = new Server(server, {
 app.use(cors({
   origin: allowedOrigins,
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
+app.options('*', cors({
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
 
 app.use(express.json());
+
+// Connect to MongoDB and start server
+console.log('Connecting to MongoDB...');
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/')
+.then(() => {
+  console.log('MongoDB connected successfully');
+
+  const PORT = process.env.PORT || 3000;
+})
+.catch((err) => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1);
+});
+
+// Mount routes
+app.use('/api/admin', adminAuthRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/feedback', feedbackRoutes);
+const { Difficulty, Category, Topics } = require('../../shared/constants/exercise');
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -352,21 +365,38 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('language_change', ({ roomId, language }) => {
-    const room = activeRooms.get(roomId);
-    if (room) {
+  socket.on('language_change', async ({ roomId, language }) => {
+    try {
+      const room = activeRooms.get(roomId);
+      if (!room) {
+        console.log('Language change failed: Room not found', roomId);
+        return;
+      }
+  
+      console.log(`Language change request: ${room.language} -> ${language} in room ${roomId}`);
+  
+      // Update room language
       room.language = language;
-      socket.to(roomId).emit('language_changed', language);
+  
+      // Broadcast to EVERYONE including sender
+      io.in(roomId).emit('language_changed', language);
       
-      // Track analytics
-      trackAnalytics('language_changed', {
+      // Track analytics AFTER successful broadcast
+      await trackAnalytics('language_changed', {
         roomId,
         language,
         userId: socket.userId,
-        username: socket.username
+        username: socket.username,
+        previousLanguage: room.language
       });
+  
+      console.log(`Language successfully changed to ${language} in room ${roomId}`);
+  
+    } catch (error) {
+      console.error('Language change error:', error);
+      socket.emit('error', { message: 'Failed to change language' });
     }
-  });
+  });  
 
   socket.on('cursor_move', ({ roomId, userId, username, position }) => {
     socket.to(roomId).emit('cursor_update', { userId, username, position });
@@ -481,6 +511,8 @@ server.listen(PORT, () => {
   console.log('- POST /api/rooms');
   console.log('- POST /api/feedback');
   console.log('- POST /api/analyze');
+  console.log(`Server running on port ${PORT}`);
+  console.log('Full server initialization complete');
 });
 
 // Handle uncaught errors

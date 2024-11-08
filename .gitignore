@@ -10,3 +10,6 @@ frontend/.env.production
 frontend/.env.production
 frontend/.env.production
 frontend/.env
+backend/src/scripts/setupAdmin.cjs
+backend/src/scripts/importExercises.js
+backend/src/scripts/exercises.js
