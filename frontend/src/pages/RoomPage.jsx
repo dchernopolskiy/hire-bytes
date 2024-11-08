@@ -8,6 +8,7 @@ import { ParticipantsList } from '../components/ParticipantsList';
 import { NotificationOverlay } from '../components/NotificationOverlay';
 import { JoinRoomForm } from '../components/JoinRoomForm';
 import RightPanel from '../components/RightPanel';
+import CodeExecutionPanel from '../components/CodeExecutionPanel';
 
 
 // Header
@@ -348,33 +349,41 @@ const RoomPage = () => {
       <div className="flex-1 flex">
         <div className="flex-1 p-4">
           <div className="h-full rounded-lg overflow-hidden border border-gray-700/50 bg-gray-900/50">
-            <CodeEditor
-              code={code}
-              language={language}
-              onChange={handleCodeChange}
-              onCursorActivity={handleCursorActivity}
-              isUserMuted={isUserMuted}
-              cursors={cursors}
-              fontSize={fontSize}
-              theme={theme}
-              getLanguageExtension={getLanguageExtension}
-              selections={[]}
-              activeHighlights={[]}
-            />
+            <div className="flex flex-col h-full">
+              <div className="flex-1 min-h-0"> {/* Add min-h-0 to allow proper flex behavior */}
+                <CodeEditor
+                  code={code}
+                  language={language}
+                  onChange={handleCodeChange}
+                  onCursorActivity={handleCursorActivity}
+                  isUserMuted={isUserMuted}
+                  cursors={cursors}
+                  fontSize={fontSize}
+                  theme={theme}
+                  getLanguageExtension={getLanguageExtension}
+                  selections={[]}
+                  activeHighlights={[]}
+                />
+              </div>
+              <CodeExecutionPanel 
+                code={code}
+                language={language}
+              />
+            </div>
           </div>
         </div>
         
         {showRightPanel && (
-        <RightPanel
-          isCreator={isCreator}
-          analysis={analysis}
-          isAnalyzing={isAnalyzing}
-          handleAnalyzeCode={handleAnalyzeCode}
-          onClose={() => setShowRightPanel(false)}
-          language={language}
-          onCodeChange={handleCodeChange}
-        />
-      )}
+          <RightPanel
+            isCreator={isCreator}
+            analysis={analysis}
+            isAnalyzing={isAnalyzing}
+            handleAnalyzeCode={handleAnalyzeCode}
+            onClose={() => setShowRightPanel(false)}
+            language={language}
+            onCodeChange={handleCodeChange}
+          />
+        )}
       </div>
 
       {showParticipants && (
