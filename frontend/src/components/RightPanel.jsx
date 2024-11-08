@@ -9,15 +9,15 @@ const RightPanel = memo(({
   handleAnalyzeCode,
   onClose,
   language,
-  onCodeChange // Add this prop
+  onCodeChange
 }) => {
-  const [activeTab, setActiveTab] = useState('analysis');
+  const [activeTab, setActiveTab] = useState(isCreator ? 'analysis' : 'notes');
   const [notes, setNotes] = useState('');
 
   const tabs = [
     { id: 'analysis', label: 'AI Analysis', icon: Brain, creatorOnly: true },
-    { id: 'exercises', label: 'Exercises', icon: Code2 },
-    { id: 'notes', label: 'Notes', icon: MessageSquare }
+    { id: 'exercises', label: 'Exercises', icon: Code2, creatorOnly: true },
+    { id: 'notes', label: 'Notes', icon: MessageSquare, creatorOnly: false }
   ].filter(tab => !tab.creatorOnly || isCreator);
 
   const copyNotesToClipboard = async () => {
@@ -37,6 +37,7 @@ const RightPanel = memo(({
   const renderTabContent = () => {
     switch (activeTab) {
       case 'analysis':
+        if (!isCreator) return null;
         return (
           <div className="flex-1 overflow-y-auto p-4">
             <button
@@ -73,13 +74,16 @@ const RightPanel = memo(({
             )}
           </div>
         );
+
       case 'exercises':
+        if (!isCreator) return null;
         return (
           <ExercisePanel 
             language={language} 
             onSelectExercise={handleExerciseSelect}
           />
         );
+
       case 'notes':
         return (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -100,6 +104,7 @@ const RightPanel = memo(({
             </button>
           </div>
         );
+
       default:
         return null;
     }
@@ -120,17 +125,17 @@ const RightPanel = memo(({
       <div className="flex border-b border-gray-700 bg-gray-900">
         {tabs.map((tab) => (
           <button
-          key={tab.id}
-          onClick={() => setActiveTab(tab.id)}
-          className={`flex-1 min-w-[100px] flex items-center justify-center gap-2 px-4 py-3
-            ${activeTab === tab.id 
-              ? 'bg-gray-800 text-white border-b-2 border-blue-500' 
-              : 'text-gray-400 hover:bg-gray-800/50'
-            } transition-colors whitespace-nowrap`}
-        >
-          <tab.icon className="w-5 h-5 flex-shrink-0" />
-          <span className="text-sm">{tab.label}</span>
-        </button>
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex-1 min-w-[100px] flex items-center justify-center gap-2 px-4 py-3
+              ${activeTab === tab.id 
+                ? 'bg-gray-800 text-white border-b-2 border-blue-500' 
+                : 'text-gray-400 hover:bg-gray-800/50'
+              } transition-colors whitespace-nowrap`}
+          >
+            <tab.icon className="w-5 h-5 flex-shrink-0" />
+            <span className="text-sm">{tab.label}</span>
+          </button>
         ))}
       </div>
 
