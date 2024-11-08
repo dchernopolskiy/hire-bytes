@@ -1,8 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export const JoinRoomForm = ({ socket, roomId }) => {
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    // Check if user is the creator
+    const storedUsername = localStorage.getItem('username');
+    const isCreator = localStorage.getItem('isCreator') === 'true';
+    const userId = localStorage.getItem('userId');
+    
+    if (storedUsername && isCreator && userId) {
+      // Auto-join if user is the creator
+      socket?.emit('join_room', { 
+        roomId, 
+        userId,
+        username: storedUsername,
+        isCreator: true
+      });
+    }
+  }, [socket, roomId]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -24,10 +41,15 @@ export const JoinRoomForm = ({ socket, roomId }) => {
     });
   };
 
+  // If user is creator, don't show the form
+  if (localStorage.getItem('isCreator') === 'true') {
+    return null;
+  }
+
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center">
       <div className="bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md mx-4">
-        <h2 className="text-2xl font-bold text-white mb-6">Join Room</h2>
+        <h2 className="text-2xl font-bold text-white mb-6">Join Interview Room</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">

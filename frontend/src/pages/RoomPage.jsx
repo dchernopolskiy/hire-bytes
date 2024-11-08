@@ -1,359 +1,409 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import { Users, Brain } from 'lucide-react';
-import { languageOptions, getLanguageExtension, getDefaultTemplate } from './languageConfig';
+import { 
+  Users, Brain, Settings, Clock
+} from 'lucide-react';
+import { languageOptions, getLanguageExtension } from '../pages/languageConfig';
 import { CodeEditor } from '../components/CodeEditor';
-import { AnalysisPanel } from '../components/AnalysisPanel';
 import { ParticipantsList } from '../components/ParticipantsList';
 import { NotificationOverlay } from '../components/NotificationOverlay';
 import { JoinRoomForm } from '../components/JoinRoomForm';
+import RightPanel from '../components/RightPanel';
 
+
+// Header
+const RoomHeader = memo(({ 
+  language, 
+  onLanguageChange, 
+  sessionTime, 
+  participantCount,
+  onParticipantsClick,
+  onAnalysisPanelToggle,
+  onSettingsClick,
+  showAnalysisPanel,
+  isCreator,
+  participantsButtonRef,
+  settingsButtonRef
+}) => {
+  const formatTime = (seconds) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="p-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-4">
+          <select
+            value={language}
+            onChange={(e) => onLanguageChange(e.target.value)}
+            className="bg-gray-700/50 text-white px-3 py-2 rounded-md border border-gray-600 
+              focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {Object.entries(languageOptions).map(([key, value]) => (
+              <option key={key} value={key}>{value.name}</option>
+            ))}
+          </select>
+        </div>
+        
+        <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2 text-sm text-gray-400">
+            <Clock className="w-4 h-4" />
+            <span>{formatTime(sessionTime)}</span>
+          </div>
+          
+          <button
+            ref={participantsButtonRef}
+            onClick={onParticipantsClick}
+            className="flex items-center space-x-2 px-3 py-2 rounded-md hover:bg-gray-700/50"
+          >
+            <Users className="w-5 h-5" />
+            <span>{participantCount}</span>
+          </button>
+
+          {isCreator && (
+            <button
+              onClick={onAnalysisPanelToggle}
+              className={`p-2 rounded-md transition-colors ${
+                showAnalysisPanel ? 'bg-blue-500/20 text-blue-400' : 'hover:bg-gray-700/50'
+              }`}
+              title="Toggle Analysis Panel"
+            >
+              <Brain className="w-5 h-5" />
+            </button>
+          )}
+
+          <button
+            ref={settingsButtonRef}
+            onClick={onSettingsClick}
+            className="p-2 hover:bg-gray-700/50 rounded-md"
+            title="Settings"
+          >
+            <Settings className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+RoomHeader.displayName = 'RoomHeader';
+
+// Main Room Page Component
 const RoomPage = () => {
   const { roomId } = useParams();
   const navigate = useNavigate();
-  const cursorTimeoutRef = useRef(null);
   
   // Core state
   const [socket, setSocket] = useState(null);
+  const [isJoined, setIsJoined] = useState(false);
+  const [isCreator] = useState(localStorage.getItem('isCreator') === 'true');
+  
+  // Room state
   const [code, setCode] = useState('// Start coding here');
   const [language, setLanguage] = useState('javascript');
   const [participants, setParticipants] = useState([]);
+  const [cursors, setCursors] = useState(new Map());
+  const [mutedUsers, setMutedUsers] = useState(new Set());
+  const [isUserMuted, setIsUserMuted] = useState(false);
+  
+  // UI state
   const [showParticipants, setShowParticipants] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showRightPanel, setShowRightPanel] = useState(true);
+  const [notifications, setNotifications] = useState([]);
+  const [sessionTime, setSessionTime] = useState(0);
+  const [theme, setTheme] = useState('dark');
+  const [fontSize, setFontSize] = useState('medium');
+
+  // UI click state
+  const participantsRef = useRef(null);
+  const settingsRef = useRef(null);
+  const participantsButtonRef = useRef(null);
+  const settingsButtonRef = useRef(null);
+  
+  // Analysis state
   const [analysis, setAnalysis] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [showAnalysisPanel, setShowAnalysisPanel] = useState(true);
-  const [notifications, setNotifications] = useState([]);
-  const [mutedUsers, setMutedUsers] = useState(new Set());
-  const [cursors, setCursors] = useState(new Map());
-  const [isJoined, setIsJoined] = useState(false);
-  const [isCreator] = useState(localStorage.getItem('isCreator') === 'true');
-  const [isUserMuted, setIsUserMuted] = useState(false);
-  const [lastCursorActivity, setLastCursorActivity] = useState(new Map());
-  const [selections, setSelections] = useState(new Map());
-  const [activeHighlights, setActiveHighlights] = useState(new Map());
 
-  const CURSOR_TIMEOUT = 60000; // 1 minute for cursor disappearance
+  // Socket connection setup
+  useEffect(() => {
+    const newSocket = io(import.meta.env.VITE_API_URL, {
+      withCredentials: true
+    });
 
-  // Notification helper
-  const addNotification = useCallback((message, type) => {
-    const id = Date.now();
+    newSocket.on('connect', () => {
+      console.log('Socket connected');
+    });
+
+    setSocket(newSocket);
+
+    return () => newSocket.disconnect();
+  }, []);
+
+  // Socket event handlers
+  useEffect(() => {
+    if (!socket) return;
+
+    const eventHandlers = {
+      user_joined: ({ userId, username }) => {
+        setParticipants(prev => [...prev, { userId, username }]);
+        addNotification(`${username} joined the room`);
+      },
+      user_left: (userId) => {
+        setParticipants(prev => {
+          const user = prev.find(p => p.userId === userId);
+          if (user) {
+            addNotification(`${user.username} left the room`);
+          }
+          return prev.filter(p => p.userId !== userId);
+        });
+      },
+      receive_code: (newCode) => setCode(newCode),
+      cursor_update: ({ userId, username, position }) => {
+        setCursors(prev => new Map(prev.set(userId, { username, position })));
+      },
+      room_state: ({ code: roomCode, language: roomLang, participants: roomParticipants }) => {
+        setCode(roomCode);
+        setLanguage(roomLang);
+        setParticipants(roomParticipants);
+        setIsJoined(true);
+      },
+      user_muted: (userId) => {
+        setMutedUsers(prev => new Set(prev.add(userId)));
+        if (userId === localStorage.getItem('userId')) {
+          setIsUserMuted(true);
+          addNotification('You have been muted by the interviewer');
+        }
+      },
+      user_unmuted: (userId) => {
+        setMutedUsers(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(userId);
+          return newSet;
+        });
+        if (userId === localStorage.getItem('userId')) {
+          setIsUserMuted(false);
+          addNotification('You have been unmuted by the interviewer');
+        }
+      },
+      kicked: (userId) => {
+        if (userId === localStorage.getItem('userId')) {
+          navigate('/');
+          addNotification('You have been removed from the room');
+        }
+      }
+    };
+
+    // Register all event handlers
+    Object.entries(eventHandlers).forEach(([event, handler]) => {
+      socket.on(event, handler);
+    });
+
+    return () => {
+      // Cleanup all event handlers
+      Object.keys(eventHandlers).forEach(event => {
+        socket.off(event);
+      });
+    };
+  }, [socket, navigate]);
+
+    // Handle click outside
+    useEffect(() => {
+      const handleClickOutside = (event) => {
+        // For Participants Panel
+        if (showParticipants && 
+            participantsRef.current && 
+            !participantsRef.current.contains(event.target) &&
+            !participantsButtonRef.current?.contains(event.target)) {
+          setShowParticipants(false);
+        }
+        
+        // For Settings Panel
+        if (showSettings && 
+            settingsRef.current && 
+            !settingsRef.current.contains(event.target) &&
+            !settingsButtonRef.current?.contains(event.target)) {
+          setShowSettings(false);
+        }
+      };
+  
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }, [showParticipants, showSettings]);
+
+  // Timer
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setSessionTime(prev => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Event handlers
+  const handleCodeChange = useCallback((newCode) => {
+    setCode(newCode);
+    socket?.emit('code_change', { roomId, code: newCode });
+  }, [socket, roomId]);
+
+  const handleLanguageChange = useCallback((newLang) => {
+    setLanguage(newLang);
+    socket?.emit('language_change', { roomId, language: newLang });
+  }, [socket, roomId]);
+
+  const handleCursorActivity = useCallback((cursorInfo) => {
+    socket?.emit('cursor_move', {
+      roomId,
+      userId: localStorage.getItem('userId'),
+      username: localStorage.getItem('username'),
+      position: cursorInfo.position,
+      isTyping: cursorInfo.isTyping
+    });
+  }, [socket, roomId]);
+
+  const handleAnalyzeCode = useCallback(async () => {
+    if (!code.trim()) return;
+    
+    setIsAnalyzing(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/analyze`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          code,
+          language
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Analysis failed');
+      }
+
+      const data = await response.json();
+      setAnalysis(data.analysis);
+    } catch (error) {
+      console.error('Analysis error:', error);
+      setAnalysis('Failed to analyze code. Please try again.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [code, language]);
+
+  const addNotification = useCallback((message, type = 'info') => {
+    const id = Math.random().toString(36).substr(2, 9);
     setNotifications(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
     }, 5000);
   }, []);
 
-  // Initialize socket connection
-  useEffect(() => {
-    const newSocket = io(import.meta.env.VITE_API_URL);
-    setSocket(newSocket);
-    return () => newSocket.disconnect();
-  }, []);
+  const handleMuteToggle = useCallback((userId) => {
+    socket?.emit(mutedUsers.has(userId) ? 'unmute_user' : 'mute_user', { roomId, userId });
+  }, [socket, roomId, mutedUsers]);
 
-  // Handle cursor tracking
-const handleCursorActivity = useCallback((view) => {
-  if (!socket || !view) return;
-
-  // Check if we're currently focused on a textarea or input
-  if (document.activeElement.tagName === 'TEXTAREA' || 
-      document.activeElement.tagName === 'INPUT') {
-    return;
-  }
-
-  // Check if we're interacting with the editor
-  const editorElement = view.dom;
-  const isMouseInEditor = (event) => {
-    if (!event) return false;
-    const rect = editorElement.getBoundingClientRect();
-    return (
-      event.clientX >= rect.left &&
-      event.clientX <= rect.right &&
-      event.clientY >= rect.top &&
-      event.clientY <= rect.bottom
-    );
-  };
-
-  if (!isMouseInEditor(window.event)) return;
-
-  if (cursorTimeoutRef.current) {
-    clearTimeout(cursorTimeoutRef.current);
-  }
-
-  cursorTimeoutRef.current = setTimeout(() => {
-    const selection = view.state.selection.main;
-    const pos = view.coordsAtPos(selection.head);
-    
-    if (!pos) return;
-
-    const editorContainer = view.scrollDOM;
-    const rect = editorContainer.getBoundingClientRect();
-    const scrollPos = {
-      top: editorContainer.scrollTop,
-      left: editorContainer.scrollLeft
-    };
-
-    const relativePos = {
-      x: pos.left - rect.left + scrollPos.left,
-      y: pos.top - rect.top + scrollPos.top
-    };
-
-    socket.emit('cursor_move', {
-      roomId,
-      userId: localStorage.getItem('userId'),
-      username: localStorage.getItem('username'),
-      position: relativePos
-    });
-
-    setLastCursorActivity(prev => 
-      new Map(prev).set(localStorage.getItem('userId'), Date.now())
-    );
-  }, 50);
-}, [socket, roomId]);
-
-  // Handle code selection
-  const handleSelection = useCallback((viewUpdate) => {
-    if (!socket || !viewUpdate.view) return;
-    
-    const selection = viewUpdate.state.selection.main;
-    if (selection.from === selection.to) return; // Skip if no selection
-    
-    const selectedText = viewUpdate.state.doc.sliceString(selection.from, selection.to);
-    
-    socket.emit('code_selection', {
-      roomId,
-      userId: localStorage.getItem('userId'),
-      username: localStorage.getItem('username'),
-      selection: {
-        from: selection.from,
-        to: selection.to,
-        text: selectedText
-      }
-    });
+  const handleKickUser = useCallback((userId) => {
+    socket?.emit('kick_user', { roomId, userId });
   }, [socket, roomId]);
 
-  // Handle code changes
-  const handleCodeChange = useCallback((value) => {
-    if (isUserMuted) {
-      addNotification("You cannot edit code while muted", 'muted');
-      return;
-    }
-    
-    setCode(value);
-    if (socket) {
-      socket.emit('code_change', { roomId, code: value });
-    }
-  }, [socket, roomId, isUserMuted, addNotification]);
-
-  // Handle language changes
-  const handleLanguageChange = useCallback((newLanguage) => {
-    setLanguage(newLanguage);
-    if (socket) {
-      socket.emit('language_change', { roomId, language: newLanguage });
-    }
-    if (!code || code === getDefaultTemplate(language)) {
-      setCode(getDefaultTemplate(newLanguage));
-    }
-  }, [socket, code, language, roomId]);
-
-  // Socket event handlers
-  useEffect(() => {
-    if (!socket) return;
-
-    // Handle user joined event
-    socket.on('user_joined', (user) => {
-      setParticipants(prev => [...prev.filter(p => p.userId !== user.userId), user]);
-      addNotification(`${user.username} joined the room`, 'info');
-    });
-
-    // Handle code updates
-    socket.on('receive_code', setCode);
-    socket.on('language_changed', setLanguage);
-
-    // Handle cursor updates
-    socket.on('cursor_update', ({ userId, username, position }) => {
-      if (userId !== localStorage.getItem('userId')) {
-        setCursors(prev => new Map(prev).set(userId, { username, position }));
-      }
-    });
-
-    // Handle selection updates
-    socket.on('code_selection_update', ({ userId, username, selection }) => {
-      if (userId !== localStorage.getItem('userId')) {
-        setActiveHighlights(prev => {
-          const newHighlights = new Map(prev);
-          newHighlights.set(userId, {
-            username,
-            selection,
-            color: stringToColor(username)
-          });
-          return newHighlights;
-        });
-      }
-    });
-
-    // Handle user mute/unmute events
-    socket.on('user_muted', (userId) => {
-      if (userId === localStorage.getItem('userId')) {
-        setIsUserMuted(true);
-        addNotification("You've been muted by the host", 'muted');
-      }
-      setMutedUsers(prev => new Set([...prev, userId]));
-    });
-
-    socket.on('user_unmuted', (userId) => {
-      if (userId === localStorage.getItem('userId')) {
-        setIsUserMuted(false);
-        addNotification("You've been unmuted", 'unmuted');
-      }
-      setMutedUsers(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(userId);
-        return newSet;
-      });
-    });
-
-    // Handle room state
-    const username = localStorage.getItem('username');
-    const userId = localStorage.getItem('userId');
-    if (username && userId) {
-      socket.emit('join_room', { roomId, userId, username, isCreator });
-    }
-
-    socket.on('room_state', ({ code: initialCode, language: initialLanguage, participants: initialParticipants }) => {
-      if (initialCode) setCode(initialCode);
-      if (initialLanguage) setLanguage(initialLanguage);
-      if (initialParticipants) setParticipants(initialParticipants);
-      setIsJoined(true);
-    });
-
-    // Handle errors
-    socket.on('error', ({ message }) => {
-      addNotification(message, 'error');
-      if (message === 'Room not found') {
-        navigate('/');
-      }
-    });
-
-    // Cleanup
-    return () => {
-      socket.off('user_joined');
-      socket.off('receive_code');
-      socket.off('cursor_update');
-      socket.off('code_selection_update');
-      socket.off('user_muted');
-      socket.off('user_unmuted');
-      socket.off('room_state');
-      socket.off('error');
-    };
-  }, [socket, roomId, navigate, isCreator, addNotification]);
-
-  // Handle code analysis
-  const handleAnalyzeCode = async () => {
-    setIsAnalyzing(true);
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, language })
-      });
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || 'Analysis failed');
-      setAnalysis(data.analysis);
-    } catch (error) {
-      console.error('Analysis failed:', error);
-      addNotification(`Analysis failed: ${error.message}`, 'error');
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  // Show join screen if not joined and not creator
-  if (!isJoined && !localStorage.getItem('isCreator')) {
+  if (!isJoined) {
     return <JoinRoomForm socket={socket} roomId={roomId} />;
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="flex h-screen">
-        {/* Main coding area */}
-        <div className={`flex-1 flex flex-col ${showAnalysisPanel ? 'mr-80' : ''}`}>
-          {/* Header */}
-          <div className="p-4 border-b border-gray-700 flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <select
-                value={language}
-                onChange={(e) => handleLanguageChange(e.target.value)}
-                className="bg-gray-800 text-white px-3 py-2 rounded-md border border-gray-700 
-                  focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {Object.entries(languageOptions).map(([key, value]) => (
-                  <option key={key} value={key}>{value.name}</option>
-                ))}
-              </select>
-              <button
-                onClick={() => setShowParticipants(!showParticipants)}
-                className="p-2 hover:bg-gray-700 rounded-md"
-                title="Show Participants"
-              >
-                <Users className="w-5 h-5" />
-              </button>
-            </div>
-            
-            {isCreator && (
-              <button
-                onClick={() => setShowAnalysisPanel(!showAnalysisPanel)}
-                className="p-2 hover:bg-gray-700 rounded-md"
-                title="Toggle Analysis Panel"
-              >
-                <Brain className="w-5 h-5" />
-              </button>
-            )}
+    <div className="h-screen bg-gray-900 text-white flex flex-col">
+      <RoomHeader
+        language={language}
+        onLanguageChange={handleLanguageChange}
+        sessionTime={sessionTime}
+        participantCount={participants.length}
+        onParticipantsClick={() => setShowParticipants(!showParticipants)}
+        onAnalysisPanelToggle={() => setShowRightPanel(!showRightPanel)}
+        onSettingsClick={() => setShowSettings(!showSettings)}
+        showAnalysisPanel={showRightPanel}
+        isCreator={isCreator}
+        participantsButtonRef={participantsButtonRef}
+        settingsButtonRef={settingsButtonRef}
+      />
+
+      <div className="flex-1 flex">
+        <div className="flex-1 p-4">
+          <div className="h-full rounded-lg overflow-hidden border border-gray-700/50 bg-gray-900/50">
+            <CodeEditor
+              code={code}
+              language={language}
+              onChange={handleCodeChange}
+              onCursorActivity={handleCursorActivity}
+              isUserMuted={isUserMuted}
+              cursors={cursors}
+              fontSize={fontSize}
+              theme={theme}
+              getLanguageExtension={getLanguageExtension}
+              selections={[]}
+              activeHighlights={[]}
+            />
           </div>
-
-          {/* Code Editor */}
-          <CodeEditor
-            code={code}
-            language={language}
-            onChange={handleCodeChange}
-            onCursorActivity={handleCursorActivity}
-            onSelection={handleSelection}
-            isUserMuted={isUserMuted}
-            cursors={cursors}
-            selections={selections}
-            activeHighlights={activeHighlights}
-            getLanguageExtension={getLanguageExtension}
-          />
         </div>
-
-        {/* Notes Panel */}
-        {showAnalysisPanel && isCreator && (
-          <AnalysisPanel
+        
+        {showRightPanel && (
+          <RightPanel
+            isCreator={isCreator}
+            analysis={analysis}
             isAnalyzing={isAnalyzing}
             handleAnalyzeCode={handleAnalyzeCode}
-            analysis={analysis}
-            onClose={() => setShowAnalysisPanel(false)}
-            addNotification={addNotification}
+            onClose={() => setShowRightPanel(false)}
           />
         )}
       </div>
 
-      {/* Participants List */}
       {showParticipants && (
         <ParticipantsList
           participants={participants}
           isCreator={isCreator}
           mutedUsers={mutedUsers}
-          onMuteToggle={(userId) => {
-            socket?.emit(mutedUsers.has(userId) ? 'unmute_user' : 'mute_user', { roomId, userId });
-          }}
-          onKick={(userId) => socket?.emit('kick_user', { roomId, userId })}
+          onMuteToggle={handleMuteToggle}
+          onKick={handleKickUser}
           onClose={() => setShowParticipants(false)}
         />
       )}
 
-      {/* Notifications */}
+      {showSettings && (
+        <div className="absolute right-4 top-16 w-64 bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-gray-700 p-4 z-50">
+          <h3 className="text-lg font-medium mb-4">Settings</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">Theme</label>
+              <select
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+                className="w-full bg-gray-700/50 rounded-md p-2 border border-gray-600"
+              >
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2">Font Size</label>
+              <select
+                value={fontSize}
+                onChange={(e) => setFontSize(e.target.value)}
+                className="w-full bg-gray-700/50 rounded-md p-2 border border-gray-600"
+              >
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+                <option value="large">Large</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <NotificationOverlay notifications={notifications} />
     </div>
   );

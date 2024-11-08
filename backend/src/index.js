@@ -4,18 +4,40 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const mongoose = require('mongoose');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 require('dotenv').config();
 
-const Room = require('./models/room');
-const User = require('./models/user');
-const analyticsRoutes = require('./routes/analyticsRoutes');
-
-console.log('Starting server initialization...');
-
 const app = express();
 const server = http.createServer(app);
+
+// Initialize Gemini
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+
+// In-memory storage
+const activeRooms = new Map();
+const feedbackStore = new Map();
+const analyticsEvents = [];
+
+// Analytics tracking function
+const trackAnalytics = (eventName, properties = {}) => {
+  const event = {
+    id: uuidv4(),
+    eventName,
+    timestamp: new Date(),
+    properties,
+    origin: 'server'
+  };
+  
+  analyticsEvents.push(event);
+  console.log(`Analytics event tracked: ${eventName}`, properties);
+  
+  // Keep only last 1000 events to prevent memory issues
+  if (analyticsEvents.length > 1000) {
+    analyticsEvents.shift();
+  }
+  
+  return event;
+};
 
 // Initialize Socket.IO with CORS options
 const allowedOrigins = [
@@ -34,27 +56,7 @@ const io = new Server(server, {
   }
 });
 
-// Initialize Gemini client
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-
-// Add tracking
-const trackAnalytics = async (eventName, properties = {}) => {
-  try {
-    const event = {
-      eventName,
-      timestamp: new Date(),
-      properties,
-      origin: 'server'
-    };
-    
-    await AnalyticsEvent.create(event);
-    console.log(`Analytics event tracked: ${eventName}`, properties);
-  } catch (error) {
-    console.error('Failed to track analytics:', error);
-  }
-};
-
-// Set up CORS
+// Set up CORS for Express
 app.use(cors({
   origin: allowedOrigins,
   methods: ['GET', 'POST', 'OPTIONS'],
@@ -64,161 +66,111 @@ app.use(cors({
 
 app.use(express.json());
 
-// Debug middleware
+// Request logging middleware
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`, req.body);
   next();
 });
 
-// Mount analytics routes
-app.use('/api/analytics', analyticsRoutes);
-
-// Socket.IO event handlers
-io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-
-  socket.on('join_room', async ({ roomId, userId, username, isCreator }) => {
-    try {
-      let room = await Room.findOne({ roomId });
-      if (!room) {
-        socket.emit('error', { message: 'Room not found' });
-        return;
-      }
-
-      // Check for existing user with same username
-      const existingUser = room.participants.find(p => 
-        p.username.toLowerCase() === username.toLowerCase() && p.userId !== userId
-      );
-      
-      if (existingUser) {
-        let counter = 1;
-        let newUsername = username;
-        while (room.participants.some(p => p.username.toLowerCase() === newUsername.toLowerCase())) {
-          newUsername = `${username} (${counter})`;
-          counter++;
-        }
-        username = newUsername;
-      }
-
-      // Update participant
-      const participantIndex = room.participants.findIndex(p => p.userId === userId);
-      if (participantIndex === -1) {
-        room.participants.push({
-          userId,
-          username,
-          joinedAt: new Date()
-        });
-      } else {
-        room.participants[participantIndex].username = username;
-        room.participants[participantIndex].joinedAt = new Date();
-      }
-      
-      await room.save();
-
-      socket.join(roomId);
-      socket.to(roomId).emit('user_joined', { userId, username });
-      
-      socket.emit('room_state', {
-        code: room.content,
-        language: room.language,
-        participants: room.participants
-      });
-
-      await trackAnalytics('room_joined', {
-        roomId,
-        userId,
-        username,
-        isCreator
-      });
-
-    } catch (error) {
-      console.error('Error joining room:', error);
-      socket.emit('error', { message: 'Failed to join room' });
-    }
-  });
-
-  socket.on('code_change', async ({ roomId, code }) => {
-    try {
-      await Room.findOneAndUpdate(
-        { roomId },
-        { content: code, lastActive: new Date() }
-      );
-      socket.to(roomId).emit('receive_code', code);
-      
-      await trackAnalytics('code_changed', {
-        roomId,
-        userId: socket.userId,
-        codeLength: code.length,
-        language: (await Room.findOne({ roomId }))?.language || 'unknown'
-      });
-    } catch (error) {
-      console.error('Error updating code:', error);
-    }
-  });
-
-  socket.on('code_change', async ({ roomId, code }) => {
-    try {
-      await Room.findOneAndUpdate(
-        { roomId },
-        { content: code, lastActive: new Date() }
-      );
-      socket.to(roomId).emit('receive_code', code);
-      
-      await trackAnalytics('code_changed', {
-        roomId,
-        userId: socket.userId,
-        codeLength: code.length,
-        language: (await Room.findOne({ roomId }))?.language || 'unknown'
-      });
-    } catch (error) {
-      console.error('Error updating code:', error);
-    }
-  });
-
-  socket.on('cursor_move', ({ roomId, userId, username, position }) => {
-    socket.to(roomId).emit('cursor_update', { userId, username, position });
-  });
-
-  socket.on('mute_user', ({ roomId, userId }) => {
-    io.to(roomId).emit('user_muted', userId);
-  });
-
-  socket.on('unmute_user', ({ roomId, userId }) => {
-    io.to(roomId).emit('user_unmuted', userId);
-  });
-
-  socket.on('kick_user', async ({ roomId, userId }) => {
-    await Room.findOneAndUpdate(
-      { roomId },
-      { $pull: { participants: { userId } } }
-    );
+// Analytics Dashboard endpoint
+app.get('/api/analytics/dashboard', (req, res) => {
+  try {
+    const { range = '7d' } = req.query;
+    const end = new Date();
+    const start = new Date();
     
-    io.to(roomId).emit('kicked', userId);
-    const userSocket = Array.from(io.sockets.sockets.values())
-      .find(s => s.userId === userId);
-    if (userSocket) {
-      userSocket.disconnect(true);
+    switch (range) {
+      case '24h':
+        start.setHours(start.getHours() - 24);
+        break;
+      case '7d':
+        start.setDate(start.getDate() - 7);
+        break;
+      case '30d':
+        start.setDate(start.getDate() - 30);
+        break;
+      default:
+        start.setDate(start.getDate() - 7);
     }
-  });
 
-  socket.on('disconnect', () => {
-    if (socket.userId) {
-      socket.rooms.forEach(roomId => {
-        if (roomId !== socket.id) {
-          socket.to(roomId).emit('user_left', socket.userId);
-        }
+    const filteredEvents = analyticsEvents.filter(
+      event => event.timestamp >= start && event.timestamp <= end
+    );
+
+    // Calculate overview stats
+    const totalRooms = activeRooms.size;
+    const activeUsers = new Set([...activeRooms.values()]
+      .flatMap(room => room.participants.map(p => p.userId))).size;
+
+    const totalAnalyses = filteredEvents.filter(
+      event => event.eventName === 'code_analyzed'
+    ).length;
+
+    // Calculate daily trends
+    const trends = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const date = d.toISOString().split('T')[0];
+      const dayEvents = filteredEvents.filter(
+        event => event.timestamp.toISOString().startsWith(date)
+      );
+      trends.push({
+        date,
+        rooms: dayEvents.filter(e => e.eventName === 'room_created').length
       });
     }
-  });
+
+    // Calculate language distribution
+    const languages = Object.entries(
+      filteredEvents
+        .filter(e => e.properties.language)
+        .reduce((acc, event) => {
+          const lang = event.properties.language;
+          acc[lang] = (acc[lang] || 0) + 1;
+          return acc;
+        }, {})
+    ).map(([name, value]) => ({ name, value }));
+
+    // Calculate daily activity
+    const dailyActivity = trends.map(({ date, rooms }) => ({
+      date,
+      sessions: rooms
+    }));
+
+    // Get recent activity
+    const recentActivity = filteredEvents
+      .slice(-10)
+      .reverse()
+      .map(event => ({
+        id: event.id,
+        type: event.eventName,
+        userId: event.properties.userId,
+        username: event.properties.username,
+        timestamp: event.timestamp
+      }));
+
+    res.json({
+      overview: {
+        totalRooms,
+        activeUsers,
+        averageSessionDuration: 0, // Placeholder since we're not tracking session duration
+        totalCodeAnalyses: totalAnalyses
+      },
+      trends,
+      languages,
+      dailyActivity,
+      recentActivity
+    });
+
+  } catch (error) {
+    console.error('Analytics error:', error);
+    res.status(500).json({ error: 'Failed to fetch analytics data' });
+  }
 });
 
-// API Endpoints
+// Room creation endpoint
 app.post('/api/rooms', async (req, res) => {
-  console.log('Creating new room:', req.body);
-  
   try {
     const { username } = req.body;
-    
     if (!username) {
       return res.status(400).json({ error: 'Username is required' });
     }
@@ -226,45 +178,31 @@ app.post('/api/rooms', async (req, res) => {
     const roomId = uuidv4();
     const userId = uuidv4();
 
-    let user = await User.findOne({ username });
-    
-    if (!user) {
-      user = new User({
+    // Create room in memory
+    activeRooms.set(roomId, {
+      roomId,
+      creatorId: userId,
+      content: '// Start coding here',
+      language: 'javascript',
+      participants: [{
         userId,
         username,
-        createdRooms: [roomId]
-      });
-    } else {
-      user.createdRooms.push(roomId);
-    }
-    
-    await user.save();
-
-    const room = new Room({
-      roomId,
-      creatorId: user.userId,
-      participants: [{
-        userId: user.userId,
-        username: user.username,
         joinedAt: new Date()
       }],
       created: new Date()
     });
 
-    await room.save();
-
-    await trackAnalytics('room_created', {
+    // Track analytics
+    trackAnalytics('room_created', {
       roomId,
-      userId: user.userId,
-      username: user.username,
-      timestamp: new Date()
+      userId,
+      username
     });
 
     res.status(201).json({
       roomId,
-      userId: user.userId,
-      username: user.username,
-      creatorId: user.userId
+      userId,
+      username
     });
   } catch (error) {
     console.error('Room creation error:', error);
@@ -272,9 +210,44 @@ app.post('/api/rooms', async (req, res) => {
   }
 });
 
+// Feedback endpoint
+app.post('/api/feedback', async (req, res) => {
+  try {
+    const { userId, username, rating, feedback } = req.body;
+
+    if (!userId || !username || !rating) {
+      return res.status(400).json({ 
+        error: 'Missing required fields' 
+      });
+    }
+
+    // Store feedback in memory
+    const feedbackId = uuidv4();
+    feedbackStore.set(feedbackId, {
+      id: feedbackId,
+      userId,
+      username,
+      rating,
+      feedback,
+      timestamp: new Date()
+    });
+
+    // Track analytics
+    trackAnalytics('feedback_submitted', {
+      userId,
+      username,
+      rating
+    });
+
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.error('Feedback submission error:', error);
+    res.status(500).json({ error: 'Failed to submit feedback' });
+  }
+});
+
 // Code analysis endpoint
 app.post('/api/analyze', async (req, res) => {
-  console.log('\n=== Starting Code Analysis ===');
   const { code, language } = req.body;
 
   if (!code) {
@@ -282,35 +255,14 @@ app.post('/api/analyze', async (req, res) => {
   }
 
   try {
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-pro",
-      safetySettings: [
-        {
-          category: "HARM_CATEGORY_HARASSMENT",
-          threshold: "BLOCK_NONE",
-        },
-        {
-          category: "HARM_CATEGORY_HATE_SPEECH",
-          threshold: "BLOCK_NONE",
-        },
-        {
-          category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-          threshold: "BLOCK_NONE",
-        },
-        {
-          category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-          threshold: "BLOCK_NONE",
-        },
-      ],
-    });
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-    const analysisPrompt = `
+    const prompt = `
       As a technical interviewer, analyze the following ${language} code. Consider:
       1. Code style and best practices
       2. Potential bugs or issues
       3. Time and space complexity (if applicable)
       4. Suggestions for improvement
-      5. Ask follow up questions  
       
       Code to analyze:
       \`\`\`${language}
@@ -320,88 +272,224 @@ app.post('/api/analyze', async (req, res) => {
       Provide a concise, bullet-point analysis focusing on the most important aspects.
     `;
 
-    const result = await model.generateContent(analysisPrompt);
-    
-    if (!result.response) {
-      throw new Error('No response from Gemini API');
-    }
-
-    await trackAnalytics('code_analyzed', {
-      language,
-      codeLength: code.length,
-      analysisTime: Date.now() - startTime,
-      success: true
-    });
+    const result = await model.generateContent(prompt);
     const analysis = result.response.text();
-    res.json({ analysis });
+    
+    // Track analytics
+    trackAnalytics('code_analyzed', {
+      language,
+      codeLength: code.length
+    });
 
+    res.json({ analysis });
   } catch (error) {
     console.error('Analysis error:', error);
-    if (error.message?.includes('quota') || error.message?.includes('rate')) {
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        message: 'Too many requests. Please wait a moment before trying again.',
-        retryAfter: 60
-      });
-    }
-
-    if (error.message?.includes('safety')) {
-      return res.status(400).json({
-        error: 'Content filtered',
-        message: 'The code analysis was blocked by safety filters. Please try different code.'
-      });
-    }
-
-    res.status(500).json({ 
-      error: 'Analysis failed', 
-      message: error.message || 'An unexpected error occurred'
-    });
+    res.status(500).json({ error: 'Analysis failed' });
   }
 });
 
-// Analytics error handling middleware
-app.use((err, req, res, next) => {
-  if (req.path.startsWith('/api/analytics')) {
-    console.error('Analytics Error:', err);
-    res.status(500).json({
-      error: 'Analytics service error',
-      message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
-    });
-    return;
-  }
-  next(err);
-});
+// Socket.IO event handlers
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
 
-// Connect to MongoDB and start server
-console.log('Connecting to MongoDB...');
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/interview-collab', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => {
-  console.log('MongoDB connected successfully');
-  
-  const PORT = process.env.PORT || 3000;
-  server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log('Full server initialization complete');
+  socket.on('join_room', ({ roomId, userId, username, isCreator }) => {
+    const room = activeRooms.get(roomId);
+    
+    if (!room) {
+      socket.emit('error', { message: 'Room not found' });
+      return;
+    }
+
+    // Store user info in socket for later use
+    socket.userId = userId;
+    socket.username = username;
+    socket.currentRoom = roomId;
+
+    // Clean up any existing entries for this user
+    room.participants = room.participants.filter(p => p.userId !== userId);
+
+    // Add user to room participants
+    room.participants.push({
+      userId,
+      username,
+      joinedAt: new Date()
+    });
+      
+    // Track analytics
+    trackAnalytics('user_joined', {
+      roomId,
+      userId,
+      username,
+      isCreator
+    });
+
+    socket.join(roomId);
+    socket.to(roomId).emit('user_joined', { userId, username });
+    
+    // Send current room state to joining user
+    socket.emit('room_state', {
+      code: room.content,
+      language: room.language,
+      participants: room.participants
+    });
   });
-})
-.catch((err) => {
-  console.error('MongoDB connection error:', err);
-  process.exit(1);
+
+  socket.on('code_change', ({ roomId, code }) => {
+    const room = activeRooms.get(roomId);
+    if (room) {
+      room.content = code;
+      socket.to(roomId).emit('receive_code', code);
+      
+      // Track analytics with username
+      if (Math.random() < 0.1) { // Only track ~10% of code changes
+        trackAnalytics('code_changed', {
+          roomId,
+          userId: socket.userId,
+          username: socket.username,
+          codeLength: code.length
+        });
+      }
+    }
+  });
+
+  socket.on('language_change', ({ roomId, language }) => {
+    const room = activeRooms.get(roomId);
+    if (room) {
+      room.language = language;
+      socket.to(roomId).emit('language_changed', language);
+      
+      // Track analytics
+      trackAnalytics('language_changed', {
+        roomId,
+        language,
+        userId: socket.userId,
+        username: socket.username
+      });
+    }
+  });
+
+  socket.on('cursor_move', ({ roomId, userId, username, position }) => {
+    socket.to(roomId).emit('cursor_update', { userId, username, position });
+  });
+
+  socket.on('mute_user', ({ roomId, userId }) => {
+    io.to(roomId).emit('user_muted', userId);
+    // Track analytics
+    trackAnalytics('user_muted', {
+      roomId,
+      mutedUserId: userId,
+      byUserId: socket.userId,
+      byUsername: socket.username
+    });
+  });
+
+  socket.on('unmute_user', ({ roomId, userId }) => {
+    io.to(roomId).emit('user_unmuted', userId);
+    // Track analytics
+    trackAnalytics('user_unmuted', {
+      roomId,
+      unmutedUserId: userId,
+      byUserId: socket.userId,
+      byUsername: socket.username
+    });
+  });
+
+  socket.on('kick_user', ({ roomId, userId }) => {
+    const room = activeRooms.get(roomId);
+    if (room) {
+      // Remove from room participants
+      room.participants = room.participants.filter(p => p.userId !== userId);
+      
+      // Notify all clients in the room
+      io.to(roomId).emit('kicked', userId);
+      
+      // Find and disconnect the kicked user's socket
+      const userSocket = Array.from(io.sockets.sockets.values())
+        .find(s => s.userId === userId);
+      if (userSocket) {
+        userSocket.disconnect(true);
+      }
+
+      // Track analytics
+      trackAnalytics('user_kicked', {
+        roomId,
+        kickedUserId: userId,
+        byUserId: socket.userId,
+        byUsername: socket.username
+      });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+    
+    if (socket.currentRoom) {
+      const room = activeRooms.get(socket.currentRoom);
+      if (room) {
+        // Remove user from participants
+        room.participants = room.participants.filter(p => p.userId !== socket.userId);
+        
+        // Notify others
+        socket.to(socket.currentRoom).emit('user_left', socket.userId);
+        
+        // Track analytics
+        trackAnalytics('user_left', {
+          roomId: socket.currentRoom,
+          userId: socket.userId,
+          username: socket.username
+        });
+
+        // Remove room if empty
+        if (room.participants.length === 0) {
+          activeRooms.delete(socket.currentRoom);
+        }
+      }
+    }
+  });
+
+  socket.on('error', (error) => {
+    console.error('Socket error:', error);
+    // Clean up user data if needed
+    if (socket.currentRoom) {
+      const room = activeRooms.get(socket.currentRoom);
+      if (room) {
+        room.participants = room.participants.filter(p => p.userId !== socket.userId);
+        if (room.participants.length === 0) {
+          activeRooms.delete(socket.currentRoom);
+        }
+      }
+    }
+  });
 });
 
+// Keepalive endpoint
 app.get('/keepalive', (_, res) => res.sendStatus(200));
 
-const feedbackRoutes = require('./routes/feedbackRoutes');
-app.use('/api/feedback', feedbackRoutes);
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({ error: 'Internal server error' });
+});
 
-// Error handling
+// Start server
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log('\nAvailable endpoints:');
+  console.log('- GET  /keepalive');
+  console.log('- GET  /api/analytics/dashboard');
+  console.log('- POST /api/rooms');
+  console.log('- POST /api/feedback');
+  console.log('- POST /api/analyze');
+});
+
+// Handle uncaught errors
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err);
+  process.exit(1);
 });
