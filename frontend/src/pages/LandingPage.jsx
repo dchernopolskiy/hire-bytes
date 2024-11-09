@@ -2,44 +2,50 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Code2, Zap, Users, Brain, Sparkles } from 'lucide-react';
 
-// Constants
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000;
+const RETRY_CONFIG = {
+  MAX_RETRIES: 3,
+  DELAY: 1000,
+  REQUEST_TIMEOUT: 15000
+};
 
-// Helper function for delay
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-// Helper Components
-const Glow = ({ color, blur = 200, opacity = 0.2, className = '' }) => (
+const GradientGlow = ({ color, blur = 200, opacity = 0.2, className = '' }) => (
   <div 
     className={`absolute pointer-events-none ${className}`}
     style={{
       background: color,
       filter: `blur(${blur}px)`,
-      opacity: opacity,
+      opacity
     }}
   />
 );
 
-const CodeBlock = () => (
+const CodePreview = () => (
   <div className="relative group">
     <div className="absolute inset-0 bg-blue-500/10 rounded-lg transition-transform group-hover:scale-105" />
     <pre className="relative p-4 rounded-lg bg-gray-800/50 border border-gray-700/50 backdrop-blur-sm font-mono text-sm overflow-hidden">
       <code className="text-gray-300">
-        <span className="text-blue-400">function</span>{' '}
-        <span className="text-yellow-400">interview</span>() {'{'}
+        <span className="text-blue-400">async</span>{' '}
+        <span className="text-yellow-400">function</span> interview() {'{'}
         <br />
-        {'  '}<span className="text-purple-400">const</span> skills = [
+        {'  '}await <span className="text-purple-400">prepare</span>({'{'}
         <br />
-        {'    '}<span className="text-green-400">'problem-solving'</span>,
+        {'    '}<span className="text-green-400">skills: [</span>
         <br />
-        {'    '}<span className="text-green-400">'coding'</span>,
+        {'      '}<span className="text-blue-300">'algorithms'</span>,
         <br />
-        {'    '}<span className="text-green-400">'communication'</span>
+        {'      '}<span className="text-blue-300">'system-design'</span>,
         <br />
-        {'  '}];
+        {'      '}<span className="text-blue-300">'problem-solving'</span>
         <br />
-        {'  '}<span className="text-blue-400">return</span> success;
+        {'    '}],
+        <br />
+        {'    '}<span className="text-green-400">tools: </span>
+        <span className="text-blue-300">'hirebytes'</span>
+        <br />
+        {'  '}{'}'});
+        <br />
+        {'  '}<span className="text-purple-400">return</span>{' '}
+        <span className="text-blue-300">'success!'</span>;
         <br />
         {'}'}
       </code>
@@ -49,7 +55,8 @@ const CodeBlock = () => (
 
 const FeatureCard = ({ icon: Icon, title, description }) => (
   <div className="relative group">
-    <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity" />
+    <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-lg 
+      opacity-0 group-hover:opacity-100 transition-opacity" />
     <div className="relative p-6 rounded-lg border border-gray-700/50 bg-gray-800/50 backdrop-blur-sm">
       <div className="flex items-center space-x-4">
         <div className="p-2 rounded-lg bg-blue-500/20">
@@ -64,15 +71,10 @@ const FeatureCard = ({ icon: Icon, title, description }) => (
   </div>
 );
 
-// Room creation function
-const attemptCreateRoom = async (username, retryCount = 0) => {
-  console.log('API URL:', import.meta.env.VITE_API_URL);
-  
+const createRoom = async (username, retryCount = 0) => {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL?.endsWith('/')
-      ? import.meta.env.VITE_API_URL + 'api/rooms'
-      : import.meta.env.VITE_API_URL + '/api/rooms';
-
+    const apiUrl = `${import.meta.env.VITE_API_URL}/api/rooms`;
+    
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
@@ -80,7 +82,7 @@ const attemptCreateRoom = async (username, retryCount = 0) => {
         'Accept': 'application/json'
       },
       body: JSON.stringify({ username }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(RETRY_CONFIG.REQUEST_TIMEOUT)
     });
 
     if (!response.ok) {
@@ -88,19 +90,15 @@ const attemptCreateRoom = async (username, retryCount = 0) => {
       throw new Error(errorData.message || `Server returned ${response.status}`);
     }
 
-    const data = await response.json();
-    return data;
-
+    return await response.json();
   } catch (error) {
-    console.error(`Room creation attempt ${retryCount + 1} failed:`, error);
-    
     if (error.name === 'AbortError') {
       throw new Error('Connection timed out. Please check your internet connection.');
     }
     
-    if (retryCount < MAX_RETRIES) {
-      await delay(RETRY_DELAY * (retryCount + 1));
-      return attemptCreateRoom(username, retryCount + 1);
+    if (retryCount < RETRY_CONFIG.MAX_RETRIES) {
+      await new Promise(resolve => setTimeout(resolve, RETRY_CONFIG.DELAY * (retryCount + 1)));
+      return createRoom(username, retryCount + 1);
     }
     
     throw error;
@@ -115,21 +113,14 @@ export function LandingPage() {
   const [error, setError] = useState('');
   const navigate = useNavigate();
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !isLoading) {
-      e.preventDefault();
-      createRoom();
-    }
-  };
-
-  const createRoom = async () => {
+  const handleCreateRoom = async () => {
     if (!username.trim()) {
-      setError('Name needed (anything works)');
+      setError('Please enter your name');
       return;
     }
 
     if (!import.meta.env.VITE_API_URL) {
-      setError('API URL not configured. Please check environment variables.');
+      setError('API configuration missing. Please check environment setup.');
       return;
     }
 
@@ -137,7 +128,7 @@ export function LandingPage() {
     setError('');
 
     try {
-      const data = await attemptCreateRoom(username);
+      const data = await createRoom(username);
       const shareableLink = `${window.location.origin}/room/${data.roomId}`;
       
       localStorage.setItem('username', username);
@@ -145,67 +136,48 @@ export function LandingPage() {
       localStorage.setItem('isCreator', 'true');
       
       setRoomInfo({ ...data, shareableLink });
-
     } catch (error) {
-      console.error('Failed to create room:', error);
+      console.error('Room creation failed:', error);
       
-      let errorMessage;
-      if (error.message.includes('timed out')) {
-        errorMessage = 'Connection timed out. Please check your internet and try again.';
-      } else if (error.message.includes('Failed to fetch')) {
-        errorMessage = 'Unable to connect to the server. Please ensure you have internet connection and try again.';
-      } else if (error.message.includes('404')) {
-        errorMessage = 'API endpoint not found. Please check server configuration.';
-      } else {
-        errorMessage = 'Failed to create room. Please try again in a few moments.';
-      }
-      
-      setError(errorMessage);
+      setError(
+        error.message.includes('timeout') ? 'Connection timed out. Please check your internet connection.' :
+        error.message.includes('Failed to fetch') ? 'Unable to connect to server. Please check your internet connection.' :
+        'Failed to create room. Please try again.'
+      );
     } finally {
       setIsLoading(false);
     }
   };
 
   const copyToClipboard = async () => {
-    if (roomInfo) {
-      try {
-        await navigator.clipboard.writeText(roomInfo.shareableLink);
-        setShowCopied(true);
-        setTimeout(() => setShowCopied(false), 2000);
-      } catch (error) {
-        console.error('Failed to copy:', error);
-        const textarea = document.createElement('textarea');
-        textarea.value = roomInfo.shareableLink;
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        setShowCopied(true);
-        setTimeout(() => setShowCopied(false), 2000);
-      }
-    }
-  };
-
-  const enterRoom = () => {
-    if (roomInfo) {
-      navigate(`/room/${roomInfo.roomId}`);
+    try {
+      await navigator.clipboard.writeText(roomInfo.shareableLink);
+      setShowCopied(true);
+      setTimeout(() => setShowCopied(false), 2000);
+    } catch (error) {
+      const textarea = document.createElement('textarea');
+      textarea.value = roomInfo.shareableLink;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setShowCopied(true);
+      setTimeout(() => setShowCopied(false), 2000);
     }
   };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white relative overflow-hidden">
-      {/* Ambient background glows */}
-      <Glow 
+      <GradientGlow 
         color="radial-gradient(circle at center, #3b82f6 0%, transparent 70%)" 
         className="w-[800px] h-[800px] -top-[400px] -left-[400px]"
       />
-      <Glow 
+      <GradientGlow 
         color="radial-gradient(circle at center, #8b5cf6 0%, transparent 70%)" 
         className="w-[600px] h-[600px] -bottom-[300px] -right-[300px]"
       />
 
       <div className="max-w-6xl mx-auto px-4 py-16 relative z-10">
-        {/* Hero Section */}
         <div className="text-center mb-16">
           <div className="inline-flex items-center space-x-3 mb-8">
             <Code2 className="w-12 h-12 text-blue-400" />
@@ -232,14 +204,14 @@ export function LandingPage() {
                   placeholder="Enter your name"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  onKeyDown={handleKeyDown}
+                  onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleCreateRoom()}
                   className="w-full px-4 py-2 bg-gray-900/50 border border-gray-700/50 rounded-md 
                     focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
                     placeholder:text-gray-600 mb-4"
                 />
 
                 <button
-                  onClick={createRoom}
+                  onClick={handleCreateRoom}
                   disabled={isLoading}
                   className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-blue-500/50
                     text-white px-6 py-3 rounded-md transition-all duration-200
@@ -248,10 +220,10 @@ export function LandingPage() {
                     flex items-center justify-center gap-2"
                 >
                   {isLoading ? (
-                    <div className="flex items-center gap-2">
+                    <>
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       Creating Room...
-                    </div>
+                    </>
                   ) : (
                     <>
                       <Sparkles className="w-5 h-5" />
@@ -273,13 +245,13 @@ export function LandingPage() {
                 />
                 <button
                   onClick={copyToClipboard}
-                  className="p-2 bg-blue-500 hover:bg-blue-600 rounded-md"
+                  className="p-2 bg-blue-500 hover:bg-blue-600 rounded-md min-w-[80px]"
                 >
                   {showCopied ? 'Copied!' : 'Copy'}
                 </button>
               </div>
               <button
-                onClick={enterRoom}
+                onClick={() => navigate(`/room/${roomInfo.roomId}`)}
                 className="w-full bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md"
               >
                 Enter Room
@@ -288,7 +260,6 @@ export function LandingPage() {
           )}
         </div>
 
-        {/* Features Grid */}
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-16">
           <FeatureCard 
             icon={Users}
@@ -301,20 +272,16 @@ export function LandingPage() {
             description="Get instant feedback on code quality, complexity, and best practices."
           />
           <FeatureCard 
-            icon={Sparkles}
-            title="Modern Experience"
-            description="A beautiful, intuitive interface designed for productive interviews."
+            icon={Zap}
+            title="Zero Setup"
+            description="Start coding instantly. No accounts, no installations, no hassle."
           />
         </div>
 
-        {/* Code Preview */}
         <div className="max-w-2xl mx-auto">
-          <CodeBlock />
+          <CodePreview />
         </div>
       </div>
-
-      {/* Footer */}
-      <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-gray-900 to-transparent" />
     </div>
   );
 }

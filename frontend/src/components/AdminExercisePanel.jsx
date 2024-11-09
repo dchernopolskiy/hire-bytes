@@ -128,6 +128,57 @@ export default function AdminExercisePanel() {
     }
   };
 
+  const DownloadButton = () => {
+    const handleDownload = async () => {
+      try {
+        const response = await fetch(
+          `${import.meta.env.VITE_API_URL}/api/admin/exercises/export`,
+          {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('adminToken')}`
+            }
+          }
+        );
+  
+        if (!response.ok) throw new Error('Failed to fetch exercises');
+  
+        const exercises = await response.json();
+        
+        // Create downloadable file
+        const blob = new Blob(
+          [JSON.stringify(exercises, null, 2)], 
+          { type: 'application/json' }
+        );
+        const url = URL.createObjectURL(blob);
+        
+        // Create download link
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `exercises-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        
+        // Cleanup
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        console.error('Download failed:', error);
+        // Handle error appropriately
+      }
+    };
+  
+    return (
+      <button
+        onClick={handleDownload}
+        className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg
+          flex items-center gap-2 transition-colors"
+      >
+        <Download className="w-5 h-5" />
+        Export Exercises
+      </button>
+    );
+  };
+
   const handleSort = (key) => {
     setSortConfig(prev => ({
       key,
@@ -221,6 +272,15 @@ export default function AdminExercisePanel() {
           {error}
         </div>
       )}
+    <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold">Exercise Management</h1>
+        <div className="flex gap-4">
+            <DownloadButton />
+            <button onClick={() => setShowForm(true)}>
+            Add Exercise
+            </button>
+        </div>
+    </div>
 
       {/* Filters */}
       <div className="mb-6 space-y-4">

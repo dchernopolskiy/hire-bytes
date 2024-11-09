@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { Users, Brain, Settings, Clock } from 'lucide-react';
+
 import { languageOptions, getLanguageExtension } from '../pages/languageConfig';
 import { CodeEditor } from '../components/CodeEditor';
 import { ParticipantsList } from '../components/ParticipantsList';
@@ -10,9 +11,7 @@ import { JoinRoomForm } from '../components/JoinRoomForm';
 import RightPanel from '../components/RightPanel';
 import CodeExecutionPanel from '../components/CodeExecutionPanel';
 
-
-// Header
-const RoomHeader = memo(({ 
+const RoomHeader = ({ 
   language, 
   onLanguageChange, 
   sessionTime, 
@@ -23,7 +22,7 @@ const RoomHeader = memo(({
   setShowSettings,
   onAnalysisPanelToggle,
   showAnalysisPanel,
-  isCreator
+  isCreator 
 }) => {
   const formatTime = (seconds) => {
     const hrs = Math.floor(seconds / 3600);
@@ -35,18 +34,16 @@ const RoomHeader = memo(({
   return (
     <div className="p-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm">
       <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <select
-            value={language}
-            onChange={(e) => onLanguageChange(e.target.value)}
-            className="bg-gray-700/50 text-white px-3 py-2 rounded-md border border-gray-600 
-              focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            {Object.entries(languageOptions).map(([key, value]) => (
-              <option key={key} value={key}>{value.name}</option>
-            ))}
-          </select>
-        </div>
+        <select
+          value={language}
+          onChange={(e) => onLanguageChange(e.target.value)}
+          className="bg-gray-700/50 text-white px-3 py-2 rounded-md border border-gray-600 
+            focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          {Object.entries(languageOptions).map(([key, value]) => (
+            <option key={key} value={key}>{value.name}</option>
+          ))}
+        </select>
         
         <div className="flex items-center space-x-4">
           <div className="flex items-center space-x-2 text-sm text-gray-400">
@@ -56,7 +53,7 @@ const RoomHeader = memo(({
           
           <button
             onClick={() => setShowParticipants(!showParticipants)}
-            className="participants-button flex items-center space-x-2 px-3 py-2 rounded-md hover:bg-gray-700/50"
+            className="flex items-center space-x-2 px-3 py-2 rounded-md hover:bg-gray-700/50"
           >
             <Users className="w-5 h-5" />
             <span>{participants.length}</span>
@@ -76,7 +73,7 @@ const RoomHeader = memo(({
 
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="settings-button p-2 hover:bg-gray-700/50 rounded-md"
+            className="p-2 hover:bg-gray-700/50 rounded-md"
             title="Settings"
           >
             <Settings className="w-5 h-5" />
@@ -85,12 +82,9 @@ const RoomHeader = memo(({
       </div>
     </div>
   );
-});
+};
 
-RoomHeader.displayName = 'RoomHeader';
-
-// Main Room Page Component
-const RoomPage = () => {
+export default function RoomPage() {
   const { roomId } = useParams();
   const navigate = useNavigate();
   
@@ -115,18 +109,11 @@ const RoomPage = () => {
   const [sessionTime, setSessionTime] = useState(0);
   const [theme, setTheme] = useState('dark');
   const [fontSize, setFontSize] = useState('medium');
-
-  // UI click state
-  const participantsRef = useRef(null);
-  const settingsRef = useRef(null);
-  const participantsButtonRef = useRef(null);
-  const settingsButtonRef = useRef(null);
   
   // Analysis state
   const [analysis, setAnalysis] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  // Socket connection setup
   useEffect(() => {
     const newSocket = io(import.meta.env.VITE_API_URL, {
       withCredentials: true
@@ -137,126 +124,75 @@ const RoomPage = () => {
     });
 
     setSocket(newSocket);
-
     return () => newSocket.disconnect();
   }, []);
 
-  // Socket event handlers
   useEffect(() => {
     if (!socket) return;
 
-    const eventHandlers = {
-      user_joined: ({ userId, username }) => {
-        setParticipants(prev => [...prev, { userId, username }]);
-        addNotification(`${username} joined the room`);
-      },
-      user_left: (userId) => {
-        setParticipants(prev => {
-          const user = prev.find(p => p.userId === userId);
-          if (user) {
-            addNotification(`${user.username} left the room`);
-          }
-          return prev.filter(p => p.userId !== userId);
-        });
-      },
-      receive_code: (newCode) => setCode(newCode),
-      cursor_update: ({ userId, username, position }) => {
-        setCursors(prev => new Map(prev.set(userId, { username, position })));
-      },
-      room_state: ({ code: roomCode, language: roomLang, participants: roomParticipants }) => {
-        setCode(roomCode);
-        setLanguage(roomLang);
-        setParticipants(roomParticipants);
-        setIsJoined(true);
-      },
-      user_muted: (userId) => {
-        setMutedUsers(prev => new Set(prev.add(userId)));
-        if (userId === localStorage.getItem('userId')) {
-          setIsUserMuted(true);
-          addNotification('You have been muted by the interviewer');
-        }
-      },
-      user_unmuted: (userId) => {
-        setMutedUsers(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(userId);
-          return newSet;
-        });
-        if (userId === localStorage.getItem('userId')) {
-          setIsUserMuted(false);
-          addNotification('You have been unmuted by the interviewer');
-        }
-      },
-      kicked: (userId) => {
-        if (userId === localStorage.getItem('userId')) {
-          navigate('/');
-          addNotification('You have been removed from the room');
-        }
+    const handleUserJoined = ({ userId, username }) => {
+      setParticipants(prev => [...prev, { userId, username }]);
+      addNotification(`${username} joined the room`);
+    };
+
+    const handleUserLeft = (userId) => {
+      setParticipants(prev => {
+        const user = prev.find(p => p.userId === userId);
+        if (user) addNotification(`${user.username} left the room`);
+        return prev.filter(p => p.userId !== userId);
+      });
+    };
+
+    const handleRoomState = ({ code, language, participants }) => {
+      setCode(code);
+      setLanguage(language);
+      setParticipants(participants);
+      setIsJoined(true);
+    };
+
+    const handleMuteEvents = (userId, isMuted) => {
+      setMutedUsers(prev => {
+        const next = new Set(prev);
+        isMuted ? next.add(userId) : next.delete(userId);
+        return next;
+      });
+
+      if (userId === localStorage.getItem('userId')) {
+        setIsUserMuted(isMuted);
+        addNotification(isMuted ? 'You have been muted' : 'You have been unmuted');
       }
     };
 
-    // Register all event handlers
-    Object.entries(eventHandlers).forEach(([event, handler]) => {
-      socket.on(event, handler);
+    socket.on('user_joined', handleUserJoined);
+    socket.on('user_left', handleUserLeft);
+    socket.on('receive_code', setCode);
+    socket.on('cursor_update', ({ userId, username, position }) => {
+      setCursors(prev => new Map(prev.set(userId, { username, position })));
+    });
+    socket.on('room_state', handleRoomState);
+    socket.on('language_changed', setLanguage);
+    socket.on('user_muted', userId => handleMuteEvents(userId, true));
+    socket.on('user_unmuted', userId => handleMuteEvents(userId, false));
+    socket.on('kicked', userId => {
+      if (userId === localStorage.getItem('userId')) {
+        navigate('/');
+        addNotification('You have been removed from the room');
+      }
     });
 
     return () => {
-      // Cleanup all event handlers
-      Object.keys(eventHandlers).forEach(event => {
-        socket.off(event);
-      });
+      socket.off('user_joined', handleUserJoined);
+      socket.off('user_left', handleUserLeft);
+      socket.off('receive_code', setCode);
+      socket.off('cursor_update');
+      socket.off('room_state', handleRoomState);
+      socket.off('language_changed', setLanguage);
+      socket.off('user_muted');
+      socket.off('user_unmuted');
+      socket.off('kicked');
     };
   }, [socket, navigate]);
 
-    // Handle click outside
-    useEffect(() => {
-      const handleClickOutside = (event) => {
-        // For Participants Panel
-        if (showParticipants && 
-            participantsRef.current && 
-            !participantsRef.current.contains(event.target) &&
-            !participantsButtonRef.current?.contains(event.target)) {
-          setShowParticipants(false);
-        }
-        
-        // For Settings Panel
-        if (showSettings && 
-            settingsRef.current && 
-            !settingsRef.current.contains(event.target) &&
-            !settingsButtonRef.current?.contains(event.target)) {
-          setShowSettings(false);
-        }
-      };
-  
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-      };
-    }, [showParticipants, showSettings]);
-
-    // Listen for language change
-    useEffect(() => {
-      if (!socket) return;
-    
-      socket.on('language_changed', (newLanguage) => {
-        console.log('Language changed received:', newLanguage);
-        setLanguage(newLanguage);
-      });
-    
-      return () => {
-        socket.off('language_changed');
-      };
-    }, [socket]);
-    
-    const handleLanguageChange = useCallback((newLang) => {
-      console.log('Requesting language change to:', newLang);
-      socket?.emit('language_change', { 
-        roomId, 
-        language: newLang 
-      });
-    }, [socket, roomId]);
-
-  // Timer
   useEffect(() => {
     const timer = setInterval(() => {
       setSessionTime(prev => prev + 1);
@@ -264,7 +200,6 @@ const RoomPage = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Event handlers
   const handleCodeChange = useCallback((newCode) => {
     setCode(newCode);
     socket?.emit('code_change', { roomId, code: newCode });
@@ -275,8 +210,7 @@ const RoomPage = () => {
       roomId,
       userId: localStorage.getItem('userId'),
       username: localStorage.getItem('username'),
-      position: cursorInfo.position,
-      isTyping: cursorInfo.isTyping
+      position: cursorInfo.position
     });
   }, [socket, roomId]);
 
@@ -287,18 +221,11 @@ const RoomPage = () => {
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/analyze`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          code,
-          language
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, language })
       });
 
-      if (!response.ok) {
-        throw new Error('Analysis failed');
-      }
+      if (!response.ok) throw new Error('Analysis failed');
 
       const data = await response.json();
       setAnalysis(data.analysis);
@@ -334,7 +261,7 @@ const RoomPage = () => {
     <div className="h-screen bg-gray-900 text-white flex flex-col">
       <RoomHeader
         language={language}
-        onLanguageChange={handleLanguageChange}
+        onLanguageChange={lang => socket?.emit('language_change', { roomId, language: lang })}
         sessionTime={sessionTime}
         participants={participants}
         showParticipants={showParticipants}
@@ -350,7 +277,7 @@ const RoomPage = () => {
         <div className="flex-1 p-4">
           <div className="h-full rounded-lg overflow-hidden border border-gray-700/50 bg-gray-900/50">
             <div className="flex flex-col h-full">
-              <div className="flex-1 min-h-0"> {/* Add min-h-0 to allow proper flex behavior */}
+              <div className="flex-1 min-h-0">
                 <CodeEditor
                   code={code}
                   language={language}
@@ -361,8 +288,6 @@ const RoomPage = () => {
                   fontSize={fontSize}
                   theme={theme}
                   getLanguageExtension={getLanguageExtension}
-                  selections={[]}
-                  activeHighlights={[]}
                 />
               </div>
               <CodeExecutionPanel 
@@ -398,13 +323,10 @@ const RoomPage = () => {
       )}
 
       {showSettings && (
-        <div className="settings-panel absolute right-4 top-16 w-64 bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-gray-700 p-4 z-50">
+        <div className="absolute right-4 top-16 w-64 bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-gray-700 p-4 z-50">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-medium">Settings</h3>
-            <button
-              onClick={() => setShowSettings(false)}
-              className="text-gray-400 hover:text-white"
-            >
+            <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white">
               ×
             </button>
           </div>
@@ -439,6 +361,4 @@ const RoomPage = () => {
       <NotificationOverlay notifications={notifications} />
     </div>
   );
-};
-
-export default RoomPage;
+}
