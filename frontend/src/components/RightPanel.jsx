@@ -29,8 +29,11 @@ const RightPanel = memo(({
   };
 
   const handleExerciseSelect = (exercise, template) => {
-    if (onCodeChange) {
+    console.log('RightPanel received template:', template); // Log what we received
+    if (onCodeChange && template) {
       onCodeChange(template);
+    } else {
+      console.log('No template or onCodeChange not available'); // Log if something's missing
     }
   };
 

@@ -8,6 +8,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const mongoose = require('mongoose');
 const { trackAnalytics } = require('./routes/analyticsService');
 const Room = require('./models/room');
+const exerciseRoutes = require('./routes/exerciseRoutes');
 require('dotenv').config();
 
 // Import routes
@@ -133,6 +134,7 @@ app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/feedback', feedbackRoutes);
+app.use('/api', exerciseRoutes);
 
 // Request logging
 app.use((req, res, next) => {

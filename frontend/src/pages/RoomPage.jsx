@@ -287,7 +287,7 @@ export default function RoomPage() {
                   cursors={cursors}
                   fontSize={fontSize}
                   theme={theme}
-                  getLanguageExtension={getLanguageExtension}
+                  getLanguageExtension={getLanguageExtension} 
                 />
               </div>
               <CodeExecutionPanel 

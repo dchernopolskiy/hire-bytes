@@ -3,7 +3,6 @@ import CodeMirror from '@uiw/react-codemirror';
 import { vscodeDark, vscodeLight } from '@uiw/codemirror-theme-vscode';
 import { EditorView } from '@codemirror/view';
 
-
 // Enhanced color generation for usernames
 const stringToColor = (str) => {
   let hash = 0;
@@ -15,29 +14,19 @@ const stringToColor = (str) => {
 };
 
 const RemoteCursor = ({ position, username, isTyping }) => {
-  const editorRef = useRef(null);
-  
-  useEffect(() => {
-    // Get editor dimensions when component mounts
-    if (editorRef.current) {
-      const editorRect = editorRef.current.getBoundingClientRect();
-      editorRef.current.style.top = `${position.top}px`;
-      editorRef.current.style.left = `${position.left}px`;
-    }
-  }, [position]);
-
   if (!position?.top || !position?.left) return null;
 
   const cursorColor = stringToColor(username);
   
   return (
     <div
-      ref={editorRef}
       style={{
         position: 'absolute',
         pointerEvents: 'none',
         zIndex: 50,
         transform: 'translate(-2px, 0)',
+        top: `${position.top}px`,
+        left: `${position.left}px`
       }}
     >
       <div 
@@ -68,12 +57,12 @@ const RemoteCursor = ({ position, username, isTyping }) => {
 };
 
 export const CodeEditor = ({
-  code,
+  code = '',
   language,
   onChange,
   onCursorActivity,
   isUserMuted,
-  cursors,
+  cursors = new Map(),
   fontSize = 'medium',
   theme = 'dark',
   getLanguageExtension,

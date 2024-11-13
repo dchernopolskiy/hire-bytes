@@ -1,57 +1,55 @@
-import express from 'express';
-import Exercise from '../models/exercise';
-const Exercise = require('./exercise.js');
+const express = require('express');
+const Exercise = require('../models/exercise.js');
+const { Category, Difficulty } = require('../models/constants');
 
 
 const router = express.Router();
 
 // Get exercise list with filters
 
-router.get('/exercises', async (req, res) => {
+router.get('/exercise-tree', async (req, res) => {
   try {
-    const {
-      category,
-      difficulty,
-      language,
-      topic,
-      page = 1,
-      limit = 20
-    } = req.query;
+    const { language } = req.query;
+    console.log('Fetching exercise tree for language:', language);
+    
+    const exercises = await Exercise.find({ 
+      is_active: true,
+      languages: language 
+    }).select('-solution');
 
-    const query = { is_active: true };
-    if (category) query.category = category;
-    if (difficulty) query.difficulty = difficulty;
-    if (language) query.languages = language;
-    if (topic) query.topics = topic;
+    const tree = Object.values(Category).map(category => ({
+      id: category,
+      name: category.replace(/_/g, ' ').toLowerCase(),
+      children: Object.values(Difficulty).map(difficulty => ({
+        id: `${category}-${difficulty}`,
+        name: difficulty,
+        exercises: exercises.filter(
+          ex => ex.category === category && ex.difficulty === difficulty
+        ).map(ex => ({
+          id: ex.id,
+          title: ex.title,
+          topics: ex.topics
+        }))
+      })).filter(child => child.exercises.length > 0)
+    })).filter(cat => cat.children.length > 0);
 
-    const exercises = await Exercise.find(query)
-      .select('-solution') // Don't send solutions by default
-      .limit(limit)
-      .skip((page - 1) * limit)
-      .sort({ 'metadata.times_solved': -1 });
-
-    const total = await Exercise.countDocuments(query);
-
-    res.json({
-      exercises,
-      pagination: {
-        total,
-        page: Number(page),
-        pages: Math.ceil(total / limit)
-      }
-    });
+    res.json(tree);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Exercise tree error:', error);
+    res.status(500).json({ error: 'Failed to fetch exercise tree' });
   }
 });
 
 // Get single exercise
 router.get('/exercises/:id', async (req, res) => {
   try {
+    console.log('Fetching exercise with ID:', req.params.id); // Log the requested ID
     const exercise = await Exercise.findOne({ 
       id: req.params.id,
       is_active: true 
     });
+    
+    console.log('Found exercise:', exercise); // Log what we found
     
     if (!exercise) {
       return res.status(404).json({ error: 'Exercise not found' });
@@ -59,6 +57,7 @@ router.get('/exercises/:id', async (req, res) => {
 
     res.json(exercise);
   } catch (error) {
+    console.error('Exercise fetch error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -84,21 +83,31 @@ router.post('/admin/exercises', async (req, res) => {
   }
 });
 
-router.put('/admin/exercises/:id', async (req, res) => {
+router.get('/exercises/:id', async (req, res) => {
   try {
-    const exercise = await Exercise.findOneAndUpdate(
-      { id: req.params.id },
-      { ...req.body, 'metadata.updatedAt': new Date() },
-      { new: true }
-    );
+    console.log('Fetching exercise with ID:', req.params.id);
+    const exercise = await Exercise.findOne({ 
+      id: req.params.id,
+      is_active: true 
+    });
+    
+    console.log('Raw exercise from DB:', exercise);
     
     if (!exercise) {
       return res.status(404).json({ error: 'Exercise not found' });
     }
-    
-    res.json(exercise);
+
+    // If templates are stored as a Map, convert to plain object
+    const exerciseObj = exercise.toObject();
+    if (exerciseObj.templates instanceof Map) {
+      exerciseObj.templates = Object.fromEntries(exerciseObj.templates);
+    }
+
+    console.log('Processed exercise to send:', exerciseObj);
+    res.json(exerciseObj);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    console.error('Exercise fetch error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -120,4 +129,4 @@ router.delete('/admin/exercises/:id', async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;  
