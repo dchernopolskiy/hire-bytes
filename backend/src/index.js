@@ -63,10 +63,29 @@ async function updateRoom(roomId, updates) {
 async function cleanupEmptyRoom(roomId) {
   try {
     const room = await Room.findOne({ roomId });
-    if (room && (!room.participants || room.participants.length === 0)) {
+    if (!room) return;
+
+    // If the creator is still connected, don't cleanup
+    const creator = room.participants.find(p => p.isCreator);
+    if (creator && !creator.disconnectedAt) return;
+
+    // Give a 5-minute grace period for reconnection
+    const gracePeriod = 5 * 60 * 1000; // 5 minutes
+    const now = Date.now();
+    
+    // Check if all participants have been disconnected for longer than grace period
+    const allDisconnected = room.participants.every(p => 
+      p.disconnectedAt && (now - p.disconnectedAt.getTime() > gracePeriod)
+    );
+
+    if (allDisconnected) {
       await Room.deleteOne({ roomId });
-      console.log(`Cleaned up empty room: ${roomId}`);
-      await trackAnalytics('room_cleaned', { roomId });
+      console.log(`Cleaned up abandoned room: ${roomId} 👋`);
+      await trackAnalytics('room_cleaned', { 
+        roomId,
+        reason: 'abandoned',
+        duration: now - room.created.getTime()
+      });
     }
   } catch (error) {
     console.error('Room cleanup error:', error);
@@ -221,34 +240,51 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Update room participants
-      room.participants = room.participants.filter(p => p.userId !== userId);
-      room.participants.push({
-        userId,
-        username,
-        joinedAt: new Date()
-      });
-      await room.save();
+      // Check for existing participant
+      const existingParticipant = room.participants.find(p => p.userId === userId);
+      if (existingParticipant) {
+        // They're reconnecting! Welcome back! 🎉
+        existingParticipant.disconnectedAt = null;
+        await room.save();
+        
+        socket.to(roomId).emit('user_reconnected', { userId, username });
+      } else {
+        // New participant
+        room.participants.push({
+          userId,
+          username,
+          isCreator,
+          joinedAt: new Date()
+        });
+        await room.save();
+        
+        socket.to(roomId).emit('user_joined', { userId, username });
+      }
 
+      // Set socket properties
       socket.userId = userId;
       socket.username = username;
       socket.currentRoom = roomId;
 
-      await trackAnalytics('user_joined', {
-        roomId,
-        userId,
-        username,
-        isCreator
-      });
-
+      // Join the room
       socket.join(roomId);
-      socket.to(roomId).emit('user_joined', { userId, username });
-      
+
+      // Send current room state
       socket.emit('room_state', {
         code: room.content,
         language: room.language,
         participants: room.participants
       });
+
+      // Track analytics
+      await trackAnalytics('user_joined', {
+        roomId,
+        userId,
+        username,
+        isCreator,
+        isReconnection: !!existingParticipant
+      });
+
     } catch (error) {
       console.error('Room join error:', error);
       socket.emit('error', { message: 'Failed to join room' });
@@ -352,30 +388,31 @@ io.on('connection', (socket) => {
   socket.on('disconnect', async () => {
     if (socket.currentRoom) {
       try {
-        const room = await getRoom(socket.currentRoom);
+        const room = await Room.findOne({ roomId: socket.currentRoom });
         if (room) {
-          room.participants = room.participants.filter(p => p.userId !== socket.userId);
-          await room.save();
+          // Mark participant as disconnected instead of removing
+          const participant = room.participants.find(p => p.userId === socket.userId);
+          if (participant) {
+            participant.disconnectedAt = new Date();
+            await room.save();
+          }
           
-          socket.to(socket.currentRoom).emit('user_left', socket.userId);
+          socket.to(socket.currentRoom).emit('user_disconnected', {
+            userId: socket.userId,
+            temporary: true
+          });
           
-          await trackAnalytics('user_left', {
+          await trackAnalytics('user_disconnected', {
             roomId: socket.currentRoom,
             userId: socket.userId,
             username: socket.username
           });
-  
-          // If room is empty, clean it up immediately
-          if (room.participants.length === 0) {
-            await cleanupEmptyRoom(socket.currentRoom);
-          }
         }
       } catch (error) {
         console.error('Disconnect error:', error);
       }
     }
-    console.log('Client disconnected:', socket.id);
-  });  
+  });
 });
 
 // Keepalive endpoint

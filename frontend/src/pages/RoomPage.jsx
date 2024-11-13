@@ -214,6 +214,19 @@ export default function RoomPage() {
     });
   }, [socket, roomId]);
 
+  const saveSession = async () => {
+    const session = {
+      code: currentCode,
+      language,
+      notes,
+      duration: sessionTime
+    };
+    
+    // Generate shareable link with session ID
+    const sessionId = await saveToDatabase(session);
+    return `${window.location.origin}/replay/${sessionId}`;
+  };
+
   const handleAnalyzeCode = useCallback(async () => {
     if (!code.trim()) return;
     

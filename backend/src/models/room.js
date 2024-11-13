@@ -27,6 +27,14 @@ const roomSchema = new mongoose.Schema({
     joinedAt: {
       type: Date,
       default: Date.now
+    },
+    isCreator: {
+      type: Boolean,
+      default: false
+    },
+    disconnectedAt: {
+      type: Date,
+      default: null
     }
   }],
   content: {

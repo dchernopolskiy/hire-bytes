@@ -102,6 +102,18 @@ export const CodeEditor = ({
     }, 50);
   }, [onCursorActivity, convertCursorPosition]);
 
+  const handleFocus = useCallback((userId, username) => {
+    socket.emit('focus_change', {
+      roomId,
+      userId,
+      username,
+      status: 'focusing'
+    });
+    
+    // Show a subtle indicator of who's actively coding
+    setCursorFocus(userId);
+  }, [socket, roomId]);
+
   // Font size classes
   const fontSizeClass = useMemo(() => {
     switch (fontSize) {

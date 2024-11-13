@@ -37,6 +37,20 @@ const RightPanel = memo(({
     }
   };
 
+  const codeSnippets = {
+    javascript: {
+      'Promise Handler': `try {
+    const result = await somePromise();
+    // Handle success
+  } catch (error) {
+    // Handle error
+  }`,
+      'Array Methods': `const filtered = array.filter(item => /* condition */);
+  const mapped = array.map(item => /* transform */);
+  const reduced = array.reduce((acc, item) => /* accumulate */, initial);`,
+    }
+  };
+  
   const renderTabContent = () => {
     switch (activeTab) {
       case 'analysis':
