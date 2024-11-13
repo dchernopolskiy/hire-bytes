@@ -300,6 +300,8 @@ export default function RoomPage() {
                   cursors={cursors}
                   fontSize={fontSize}
                   theme={theme}
+                  socket={socket}
+                  roomId={roomId}  // Add this
                   getLanguageExtension={getLanguageExtension} 
                 />
               </div>

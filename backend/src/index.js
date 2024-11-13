@@ -334,6 +334,11 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Cursor focus
+  socket.on('focus_change', ({ roomId, userId, username, status }) => {
+    socket.to(roomId).emit('focus_change', { userId, status });
+  });
+
   socket.on('cursor_move', ({ roomId, userId, username, position }) => {
     socket.to(roomId).emit('cursor_update', { userId, username, position });
   });

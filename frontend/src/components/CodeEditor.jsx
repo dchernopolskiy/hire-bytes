@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect, useRef } from 'react';
+import { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { vscodeDark, vscodeLight } from '@uiw/codemirror-theme-vscode';
 import { EditorView } from '@codemirror/view';
@@ -13,11 +13,12 @@ const stringToColor = (str) => {
   return `hsl(${hue}, 70%, 60%)`;
 };
 
-const RemoteCursor = ({ position, username, isTyping }) => {
+const RemoteCursor = ({ position, username, isTyping, isFocused, lastActive }) => {
   if (!position?.top || !position?.left) return null;
 
   const cursorColor = stringToColor(username);
-  
+  const isIdle = Date.now() - lastActive > 5000; // 5 seconds idle threshold
+
   return (
     <div
       style={{
@@ -26,18 +27,22 @@ const RemoteCursor = ({ position, username, isTyping }) => {
         zIndex: 50,
         transform: 'translate(-2px, 0)',
         top: `${position.top}px`,
-        left: `${position.left}px`
+        left: `${position.left}px`,
+        opacity: isIdle ? 0.5 : 1,
+        transition: 'opacity 0.3s ease'
       }}
     >
       <div 
-        className="w-0.5 h-5 animate-pulse"
+        className={`w-0.5 h-5 ${isTyping ? 'animate-pulse' : ''}`}
         style={{ 
           backgroundColor: cursorColor,
           boxShadow: `0 0 4px ${cursorColor}`
         }} 
       />
       <div 
-        className="absolute left-0 -top-6 flex items-center space-x-1 whitespace-nowrap px-2 py-1 rounded text-white text-xs"
+        className={`absolute left-0 -top-6 flex items-center space-x-1 whitespace-nowrap 
+          px-2 py-1 rounded text-white text-xs transition-all duration-200 
+          ${isFocused ? 'ring-2 ring-white/20' : ''}`}
         style={{ 
           backgroundColor: cursorColor,
           boxShadow: `0 0 4px ${cursorColor}88`,
@@ -50,6 +55,9 @@ const RemoteCursor = ({ position, username, isTyping }) => {
             <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
             <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
           </span>
+        )}
+        {isFocused && !isTyping && (
+          <span className="text-[10px] text-white/80">active</span>
         )}
       </div>
     </div>
@@ -65,10 +73,16 @@ export const CodeEditor = ({
   cursors = new Map(),
   fontSize = 'medium',
   theme = 'dark',
+  socket,
+  roomId,
   getLanguageExtension,
 }) => {
   const editorRef = useRef(null);
   const cursorUpdateTimeoutRef = useRef(null);
+  const [focusedUsers, setFocusedUsers] = useState(new Set());
+  const [lastActivity, setLastActivity] = useState({});
+  const [isTyping, setIsTyping] = useState(false);
+  const typingTimeoutRef = useRef(null);
   
   // Convert cursor positions from CodeMirror coordinates to screen coordinates
   const convertCursorPosition = useCallback((view, pos) => {
@@ -83,26 +97,48 @@ export const CodeEditor = ({
     };
   }, []);
 
-  // Handle cursor position updates
+  // Handle cursor position updates with typing indicator
   const handleCursorActivity = useCallback((view) => {
     if (cursorUpdateTimeoutRef.current) {
       clearTimeout(cursorUpdateTimeoutRef.current);
     }
+
+    // Update typing state
+    setIsTyping(true);
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+    }, 1500);
 
     cursorUpdateTimeoutRef.current = setTimeout(() => {
       const selection = view.state.selection.main;
       const pos = convertCursorPosition(view, selection.head);
       
       if (pos) {
+        const userId = localStorage.getItem('userId');
+        setLastActivity(prev => ({
+          ...prev,
+          [userId]: Date.now()
+        }));
+        
         onCursorActivity?.({
           position: pos,
-          isTyping: true
+          isTyping: true,
+          lastActive: Date.now()
         });
       }
     }, 50);
   }, [onCursorActivity, convertCursorPosition]);
 
-  const handleFocus = useCallback((userId, username) => {
+  // Handle focus events
+  const handleFocus = useCallback(() => {
+    if (!socket || !roomId) return;
+
+    const userId = localStorage.getItem('userId');
+    const username = localStorage.getItem('username');
+
     socket.emit('focus_change', {
       roomId,
       userId,
@@ -110,9 +146,63 @@ export const CodeEditor = ({
       status: 'focusing'
     });
     
-    // Show a subtle indicator of who's actively coding
-    setCursorFocus(userId);
+    setFocusedUsers(prev => new Set([...prev, userId]));
+    setLastActivity(prev => ({
+      ...prev,
+      [userId]: Date.now()
+    }));
   }, [socket, roomId]);
+
+  const handleBlur = useCallback(() => {
+    if (!socket || !roomId) return;
+
+    const userId = localStorage.getItem('userId');
+    socket.emit('focus_change', {
+      roomId,
+      userId,
+      status: 'blur'
+    });
+    
+    setFocusedUsers(prev => {
+      const next = new Set(prev);
+      next.delete(userId);
+      return next;
+    });
+  }, [socket, roomId]);
+
+  // Listen for focus change events from other users
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleFocusChange = ({ userId, status }) => {
+      setFocusedUsers(prev => {
+        const next = new Set(prev);
+        if (status === 'focusing') {
+          next.add(userId);
+        } else {
+          next.delete(userId);
+        }
+        return next;
+      });
+    };
+
+    socket.on('focus_change', handleFocusChange);
+    return () => {
+      socket.off('focus_change', handleFocusChange);
+    };
+  }, [socket]);
+
+  // Cleanup
+  useEffect(() => {
+    return () => {
+      if (cursorUpdateTimeoutRef.current) {
+        clearTimeout(cursorUpdateTimeoutRef.current);
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Font size classes
   const fontSizeClass = useMemo(() => {
@@ -142,6 +232,8 @@ export const CodeEditor = ({
           extensions={[getLanguageExtension(language)]}
           onChange={onChange}
           editable={!isUserMuted}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
           onUpdate={(viewUpdate) => {
             if (viewUpdate.selectionSet) {
               handleCursorActivity(viewUpdate.view);
@@ -175,13 +267,15 @@ export const CodeEditor = ({
         />
         
         <div className="absolute inset-0 pointer-events-none">
-          {Array.from(cursors.entries()).map(([userId, { username, position, isTyping }]) => (
+          {Array.from(cursors.entries()).map(([userId, { username, position, isTyping: remoteIsTyping }]) => (
             userId !== localStorage.getItem('userId') && (
               <RemoteCursor
                 key={userId}
                 position={position}
                 username={username}
-                isTyping={isTyping}
+                isTyping={remoteIsTyping}
+                isFocused={focusedUsers.has(userId)}
+                lastActive={lastActivity[userId] || Date.now()}
               />
             )
           ))}
