@@ -1,50 +1,62 @@
 import { useState, useEffect } from 'react';
 
-export const JoinRoomForm = ({ socket, roomId }) => {
+export const JoinRoomForm = ({ socket, roomId, onJoin }) => {
   const [username, setUsername] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
+    console.log('JoinRoomForm mounted', { socket, roomId });
     // Check if user is the creator
     const storedUsername = localStorage.getItem('username');
     const isCreator = localStorage.getItem('isCreator') === 'true';
     const userId = localStorage.getItem('userId');
     
-    if (storedUsername && isCreator && userId) {
-      // Auto-join if user is the creator
-      socket?.emit('join_room', { 
+    if (storedUsername && isCreator && userId && socket) {
+      console.log('Auto-joining as creator', { storedUsername, userId });
+      socket.emit('join_room', { 
         roomId, 
         userId,
         username: storedUsername,
         isCreator: true
       });
+      onJoin?.();
     }
-  }, [socket, roomId]);
+  }, [socket, roomId, onJoin]);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!username.trim()) {
-      setError('Please enter a name');
-      return;
-    }
-
-    const userId = Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('username', username);
-    localStorage.setItem('userId', userId);
-    localStorage.setItem('isCreator', 'false');
+    console.log('Attempting to join room', { username, roomId });
     
-    socket?.emit('join_room', { 
-      roomId, 
-      userId, 
-      username, 
-      isCreator: false 
-    });
-  };
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/rooms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+      });
 
-  // If user is creator, don't show the form
-  if (localStorage.getItem('isCreator') === 'true') {
-    return null;
-  }
+      if (!response.ok) {
+        throw new Error('Failed to create room');
+      }
+
+      const { userId } = await response.json();
+      localStorage.setItem('username', username);
+      localStorage.setItem('userId', userId);
+      localStorage.setItem('isCreator', 'false');
+
+      if (socket) {
+        socket.emit('join_room', { 
+          roomId, 
+          userId, 
+          username, 
+          isCreator: false 
+        });
+        onJoin?.();
+      }
+    } catch (err) {
+      console.error('Failed to join room:', err);
+      setError('Failed to join room. Please try again.');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center">

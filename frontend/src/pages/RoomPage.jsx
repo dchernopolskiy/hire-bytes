@@ -1,88 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import { Users, Brain, Settings, Clock } from 'lucide-react';
-
-import { languageOptions, getLanguageExtension } from '../pages/languageConfig';
+import { useCodeSync } from '../services/useCodeSync';
+import { useCollaboration } from '../services/useCollaboration';
+import { RoomHeader } from '../components/RoomHeader';
 import { CodeEditor } from '../components/CodeEditor';
 import { ParticipantsList } from '../components/ParticipantsList';
 import { NotificationOverlay } from '../components/NotificationOverlay';
 import { JoinRoomForm } from '../components/JoinRoomForm';
 import RightPanel from '../components/RightPanel';
 import CodeExecutionPanel from '../components/CodeExecutionPanel';
-
-const RoomHeader = ({ 
-  language, 
-  onLanguageChange, 
-  sessionTime, 
-  participants,
-  showParticipants,
-  setShowParticipants,
-  showSettings,
-  setShowSettings,
-  onAnalysisPanelToggle,
-  showAnalysisPanel,
-  isCreator 
-}) => {
-  const formatTime = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  return (
-    <div className="p-4 border-b border-gray-700 bg-gray-800/50 backdrop-blur-sm">
-      <div className="flex items-center justify-between">
-        <select
-          value={language}
-          onChange={(e) => onLanguageChange(e.target.value)}
-          className="bg-gray-700/50 text-white px-3 py-2 rounded-md border border-gray-600 
-            focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          {Object.entries(languageOptions).map(([key, value]) => (
-            <option key={key} value={key}>{value.name}</option>
-          ))}
-        </select>
-        
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2 text-sm text-gray-400">
-            <Clock className="w-4 h-4" />
-            <span>{formatTime(sessionTime)}</span>
-          </div>
-          
-          <button
-            onClick={() => setShowParticipants(!showParticipants)}
-            className="flex items-center space-x-2 px-3 py-2 rounded-md hover:bg-gray-700/50"
-          >
-            <Users className="w-5 h-5" />
-            <span>{participants.length}</span>
-          </button>
-
-          {isCreator && (
-            <button
-              onClick={onAnalysisPanelToggle}
-              className={`p-2 rounded-md transition-colors ${
-                showAnalysisPanel ? 'bg-blue-500/20 text-blue-400' : 'hover:bg-gray-700/50'
-              }`}
-              title="Toggle Analysis Panel"
-            >
-              <Brain className="w-5 h-5" />
-            </button>
-          )}
-
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            className="p-2 hover:bg-gray-700/50 rounded-md"
-            title="Settings"
-          >
-            <Settings className="w-5 h-5" />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
+import { languageOptions, getLanguageExtension } from './languageConfig';
 
 export default function RoomPage() {
   const { roomId } = useParams();
@@ -93,13 +21,26 @@ export default function RoomPage() {
   const [isJoined, setIsJoined] = useState(false);
   const [isCreator] = useState(localStorage.getItem('isCreator') === 'true');
   
-  // Room state
-  const [code, setCode] = useState('// Start coding here');
-  const [language, setLanguage] = useState('javascript');
-  const [participants, setParticipants] = useState([]);
-  const [cursors, setCursors] = useState(new Map());
-  const [mutedUsers, setMutedUsers] = useState(new Set());
-  const [isUserMuted, setIsUserMuted] = useState(false);
+  // Room state managed by custom hooks
+  const {
+    code,
+    setCode,
+    language,
+    setLanguage,
+    handleCodeChange,
+    handleLanguageChange,
+  } = useCodeSync(socket, roomId);
+
+  const {
+    participants,
+    cursors,
+    mutedUsers,
+    isUserMuted,
+    handleCursorActivity,
+    handleMuteToggle,
+    handleKickUser,
+    addNotification
+  } = useCollaboration(socket, roomId);
   
   // UI state
   const [showParticipants, setShowParticipants] = useState(false);
@@ -114,121 +55,83 @@ export default function RoomPage() {
   const [analysis, setAnalysis] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  // Single socket initialization with enhanced error handling
   useEffect(() => {
+    console.log('Initializing socket connection...');
     const newSocket = io(import.meta.env.VITE_API_URL, {
-      withCredentials: true
+      withCredentials: true,
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: 5,
+      timeout: 10000
+    });
+
+    newSocket.on('connect_error', (error) => {
+      addNotification('Connection error. Retrying...', 'error');
+      console.error('Socket connection error:', error);
     });
 
     newSocket.on('connect', () => {
-      console.log('Socket connected');
+      addNotification('Connected to server', 'success');
+      console.log('Socket connected successfully');
+    });
+
+    newSocket.on('disconnect', (reason) => {
+      addNotification('Disconnected from server. Attempting to reconnect...', 'warning');
+      console.log('Socket disconnected:', reason);
     });
 
     setSocket(newSocket);
-    return () => newSocket.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleUserJoined = ({ userId, username }) => {
-      setParticipants(prev => [...prev, { userId, username }]);
-      addNotification(`${username} joined the room`);
-    };
-
-    const handleUserLeft = (userId) => {
-      setParticipants(prev => {
-        const user = prev.find(p => p.userId === userId);
-        if (user) addNotification(`${user.username} left the room`);
-        return prev.filter(p => p.userId !== userId);
-      });
-    };
-
-    const handleRoomState = ({ code, language, participants }) => {
-      setCode(code);
-      setLanguage(language);
-      setParticipants(participants);
-      setIsJoined(true);
-    };
-
-    const handleMuteEvents = (userId, isMuted) => {
-      setMutedUsers(prev => {
-        const next = new Set(prev);
-        isMuted ? next.add(userId) : next.delete(userId);
-        return next;
-      });
-
-      if (userId === localStorage.getItem('userId')) {
-        setIsUserMuted(isMuted);
-        addNotification(isMuted ? 'You have been muted' : 'You have been unmuted');
-      }
-    };
-
-    socket.on('user_joined', handleUserJoined);
-    socket.on('user_left', handleUserLeft);
-    socket.on('receive_code', setCode);
-    socket.on('cursor_update', ({ userId, username, position }) => {
-      setCursors(prev => new Map(prev.set(userId, { username, position })));
-    });
-    socket.on('room_state', handleRoomState);
-    socket.on('language_changed', setLanguage);
-    socket.on('user_muted', userId => handleMuteEvents(userId, true));
-    socket.on('user_unmuted', userId => handleMuteEvents(userId, false));
-    socket.on('kicked', userId => {
-      if (userId === localStorage.getItem('userId')) {
-        navigate('/');
-        addNotification('You have been removed from the room');
-      }
-    });
 
     return () => {
-      socket.off('user_joined', handleUserJoined);
-      socket.off('user_left', handleUserLeft);
-      socket.off('receive_code', setCode);
-      socket.off('cursor_update');
-      socket.off('room_state', handleRoomState);
-      socket.off('language_changed', setLanguage);
-      socket.off('user_muted');
-      socket.off('user_unmuted');
-      socket.off('kicked');
+      console.log('Cleaning up socket connection');
+      newSocket?.disconnect();
     };
-  }, [socket, navigate]);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setSessionTime(prev => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
   }, []);
 
-  const handleCodeChange = useCallback((newCode) => {
-    setCode(newCode);
-    socket?.emit('code_change', { roomId, code: newCode });
-  }, [socket, roomId]);
-
-  const handleCursorActivity = useCallback((cursorInfo) => {
-    socket?.emit('cursor_move', {
-      roomId,
-      userId: localStorage.getItem('userId'),
-      username: localStorage.getItem('username'),
-      position: cursorInfo.position
-    });
-  }, [socket, roomId]);
-
-  const saveSession = async () => {
-    const session = {
-      code: currentCode,
-      language,
-      notes,
-      duration: sessionTime
+  // Room state handling
+  useEffect(() => {
+    if (!socket) return;
+  
+    const handleRoomState = (state) => {
+      console.log('Received room state', state);
+      setIsJoined(true);
     };
-    
-    // Generate shareable link with session ID
-    const sessionId = await saveToDatabase(session);
-    return `${window.location.origin}/replay/${sessionId}`;
-  };
+  
+    socket.on('room_state', handleRoomState);
+    return () => socket.off('room_state', handleRoomState);
+  }, [socket]);
 
+  // Session timer with persistence
+  useEffect(() => {
+    const savedTime = parseInt(sessionStorage.getItem(`session_time_${roomId}`)) || 0;
+    setSessionTime(savedTime);
+
+    const timer = setInterval(() => {
+      setSessionTime(prev => {
+        const newTime = prev + 1;
+        sessionStorage.setItem(`session_time_${roomId}`, newTime.toString());
+        return newTime;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [roomId]);
+
+  // Logging
+  useEffect(() => {
+    console.log('Room state:', {
+      isJoined,
+      socketConnected: !!socket,
+      participants,
+      code
+    });
+  }, [isJoined, socket, participants, code]);
+
+  // Code analysis handler with rate limiting
   const handleAnalyzeCode = useCallback(async () => {
-    if (!code.trim()) return;
+    if (!code.trim() || isAnalyzing) return;
     
     setIsAnalyzing(true);
     try {
@@ -242,39 +145,35 @@ export default function RoomPage() {
 
       const data = await response.json();
       setAnalysis(data.analysis);
+      addNotification('Code analysis completed', 'success');
     } catch (error) {
       console.error('Analysis error:', error);
       setAnalysis('Failed to analyze code. Please try again.');
+      addNotification('Code analysis failed', 'error');
     } finally {
       setIsAnalyzing(false);
     }
-  }, [code, language]);
+  }, [code, language, isAnalyzing]);
 
-  const addNotification = useCallback((message, type = 'info') => {
-    const id = Math.random().toString(36).substr(2, 9);
-    setNotifications(prev => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 5000);
-  }, []);
+  // Room exit handler - potential for onbeforeunload?
+  // const handleExit = useCallback(() => {
+  //   const confirmExit = window.confirm('Are you sure you want to leave the room?');
+  //   if (confirmExit) {
+  //     socket?.disconnect();
+  //     navigate('/');
+  //   }
+  // }, [navigate, socket]);
 
-  const handleMuteToggle = useCallback((userId) => {
-    socket?.emit(mutedUsers.has(userId) ? 'unmute_user' : 'mute_user', { roomId, userId });
-  }, [socket, roomId, mutedUsers]);
-
-  const handleKickUser = useCallback((userId) => {
-    socket?.emit('kick_user', { roomId, userId });
-  }, [socket, roomId]);
-
+  // Join room gate
   if (!isJoined) {
-    return <JoinRoomForm socket={socket} roomId={roomId} />;
+    return <JoinRoomForm socket={socket} roomId={roomId} onJoin={() => setIsJoined(true)} />;
   }
 
   return (
-    <div className="h-screen bg-gray-900 text-white flex flex-col">
+    <div className="h-screen flex flex-col bg-gray-900 text-white">
       <RoomHeader
         language={language}
-        onLanguageChange={lang => socket?.emit('language_change', { roomId, language: lang })}
+        onLanguageChange={handleLanguageChange}
         sessionTime={sessionTime}
         participants={participants}
         showParticipants={showParticipants}
@@ -284,32 +183,32 @@ export default function RoomPage() {
         onAnalysisPanelToggle={() => isCreator && setShowRightPanel(!showRightPanel)}
         showAnalysisPanel={showRightPanel}
         isCreator={isCreator}
+        // onExit={handleExit}
       />
 
-      <div className="flex-1 flex">
+      <div className="flex-1 flex min-h-0">
         <div className="flex-1 p-4">
-          <div className="h-full rounded-lg overflow-hidden border border-gray-700/50 bg-gray-900/50">
-            <div className="flex flex-col h-full">
-              <div className="flex-1 min-h-0">
-                <CodeEditor
-                  code={code}
-                  language={language}
-                  onChange={handleCodeChange}
-                  onCursorActivity={handleCursorActivity}
-                  isUserMuted={isUserMuted}
-                  cursors={cursors}
-                  fontSize={fontSize}
-                  theme={theme}
-                  socket={socket}
-                  roomId={roomId}  // Add this
-                  getLanguageExtension={getLanguageExtension} 
-                />
-              </div>
-              <CodeExecutionPanel 
+          <div className="h-[calc(100vh-87px)] rounded-lg border border-gray-700 
+            bg-gray-900/50 shadow-lg flex flex-col">
+            <div className="flex-1 min-h-0">
+              <CodeEditor
                 code={code}
                 language={language}
+                onChange={handleCodeChange}
+                onCursorActivity={handleCursorActivity}
+                isUserMuted={isUserMuted}
+                cursors={cursors}
+                fontSize={fontSize}
+                theme={theme}
+                socket={socket}
+                roomId={roomId}
+                getLanguageExtension={getLanguageExtension}
               />
             </div>
+            <CodeExecutionPanel 
+              code={code}
+              language={language}
+            />
           </div>
         </div>
         
@@ -322,6 +221,8 @@ export default function RoomPage() {
             onClose={() => setShowRightPanel(false)}
             language={language}
             onCodeChange={handleCodeChange}
+            socket={socket}
+            roomId={roomId}
           />
         )}
       </div>
@@ -338,10 +239,14 @@ export default function RoomPage() {
       )}
 
       {showSettings && (
-        <div className="absolute right-4 top-16 w-64 bg-gray-800/95 backdrop-blur-sm rounded-lg shadow-xl border border-gray-700 p-4 z-50">
+        <div className="absolute right-4 top-16 w-64 bg-gray-800/95 backdrop-blur-sm 
+          rounded-lg shadow-xl border border-gray-700 p-4 z-50">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-medium">Settings</h3>
-            <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white">
+            <button 
+              onClick={() => setShowSettings(false)} 
+              className="text-gray-400 hover:text-white transition-colors"
+            >
               ×
             </button>
           </div>
@@ -351,7 +256,8 @@ export default function RoomPage() {
               <select
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
-                className="w-full bg-gray-700/50 rounded-md p-2 border border-gray-600"
+                className="w-full bg-gray-700/50 rounded-md p-2 border border-gray-600
+                  focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="dark">Dark</option>
                 <option value="light">Light</option>
@@ -362,18 +268,90 @@ export default function RoomPage() {
               <select
                 value={fontSize}
                 onChange={(e) => setFontSize(e.target.value)}
-                className="w-full bg-gray-700/50 rounded-md p-2 border border-gray-600"
+                className="w-full bg-gray-700/50 rounded-md p-2 border border-gray-600
+                  focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="small">Small</option>
                 <option value="medium">Medium</option>
                 <option value="large">Large</option>
               </select>
             </div>
+            
+            {/* Performance Settings */}
+            <div>
+              <label className="block text-sm font-medium mb-2">Editor Performance</label>
+              <div className="space-y-2">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={localStorage.getItem('optimize_cursor_sync') === 'true'}
+                    onChange={(e) => {
+                      localStorage.setItem('optimize_cursor_sync', e.target.checked);
+                      window.location.reload();
+                    }}
+                    className="rounded border-gray-600 bg-gray-700 text-blue-500
+                      focus:ring-blue-500 mr-2"
+                  />
+                  <span className="text-sm">Optimize cursor syncing</span>
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={localStorage.getItem('disable_animations') === 'true'}
+                    onChange={(e) => {
+                      localStorage.setItem('disable_animations', e.target.checked);
+                      window.location.reload();
+                    }}
+                    className="rounded border-gray-600 bg-gray-700 text-blue-500
+                      focus:ring-blue-500 mr-2"
+                  />
+                  <span className="text-sm">Disable animations</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Accessibility Settings */}
+            <div>
+              <label className="block text-sm font-medium mb-2">Accessibility</label>
+              <div className="space-y-2">
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={localStorage.getItem('high_contrast') === 'true'}
+                    onChange={(e) => {
+                      localStorage.setItem('high_contrast', e.target.checked);
+                      window.location.reload();
+                    }}
+                    className="rounded border-gray-600 bg-gray-700 text-blue-500
+                      focus:ring-blue-500 mr-2"
+                  />
+                  <span className="text-sm">High contrast mode</span>
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="checkbox"
+                    checked={localStorage.getItem('reduce_motion') === 'true'}
+                    onChange={(e) => {
+                      localStorage.setItem('reduce_motion', e.target.checked);
+                      window.location.reload();
+                    }}
+                    className="rounded border-gray-600 bg-gray-700 text-blue-500
+                      focus:ring-blue-500 mr-2"
+                  />
+                  <span className="text-sm">Reduce motion</span>
+                </label>
+              </div>
+            </div>
           </div>
         </div>
       )}
       
-      <NotificationOverlay notifications={notifications} />
+      <NotificationOverlay 
+        notifications={notifications}
+        onDismiss={(id) => setNotifications(prev => 
+          prev.filter(n => n.id !== id)
+        )} 
+      />
     </div>
   );
 }

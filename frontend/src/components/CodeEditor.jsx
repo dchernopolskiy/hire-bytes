@@ -1,76 +1,98 @@
-import { useCallback, useMemo, useEffect, useRef, useState } from 'react';
+import { useCallback, useMemo, useEffect, useRef } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
-import { vscodeDark, vscodeLight } from '@uiw/codemirror-theme-vscode';
-import { EditorView } from '@codemirror/view';
+import { vscodeDark } from '@uiw/codemirror-theme-vscode';
+import { javascript } from '@codemirror/lang-javascript';
+import { ViewPlugin, Decoration, EditorView } from '@codemirror/view';
+import { StateField, StateEffect } from '@codemirror/state';
+import { EditorCursor } from './CursorManager';
 
-// Enhanced color generation for usernames
-const stringToColor = (str) => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+// Shared document position mapping
+const addRemoteSelection = StateEffect.define();
+const removeRemoteSelection = StateEffect.define();
+
+// Remote selection decoration
+const remoteSelectionField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(selections, tr) {
+    // If there are document changes, we need to carefully map the selections
+    if (tr.docChanged) {
+      try {
+        selections = selections.map(tr.changes);
+      } catch (err) {
+        console.warn('Failed to map selections:', err);
+        return Decoration.none; // Reset selections if mapping fails
+      }
+    }
+
+    // Handle selection effects
+    for (let effect of tr.effects) {
+      if (effect.is(addRemoteSelection)) {
+        const { from, to, userId, color } = effect.value;
+        
+        // Validate positions are within document bounds
+        const docLength = tr.state.doc.length;
+        if (from > docLength || to > docLength) {
+          console.warn('Selection out of bounds:', { from, to, docLength });
+          continue;
+        }
+
+        try {
+          selections = selections.update({
+            add: [createRemoteSelection({
+              from: Math.min(from, docLength),
+              to: Math.min(to, docLength),
+              userId,
+              color
+            })]
+          });
+        } catch (err) {
+          console.warn('Failed to add selection:', err);
+        }
+      } else if (effect.is(removeRemoteSelection)) {
+        try {
+          selections = selections.update({
+            filter: (from, to, value) => value.id !== effect.value
+          });
+        } catch (err) {
+          console.warn('Failed to remove selection:', err);
+        }
+      }
+    }
+    return selections;
+  },
+  provide: f => EditorView.decorations.from(f)
+});
+
+const createRemoteSelection = ({ from, to, userId, color }) => {
+  // Ensure valid range and default to cursor position if no selection
+  if (from === to || !from || !to) {
+    return Decoration.mark({
+      attributes: { 
+        class: `remote-cursor-${userId}`,
+        style: `background-color: ${color}`
+      },
+      inclusive: true
+    }).range(from, from + 1); // Make it a 1-character selection
   }
-  const hue = hash % 360;
-  return `hsl(${hue}, 70%, 60%)`;
-};
-
-const RemoteCursor = ({ position, username, isTyping, isFocused, lastActive }) => {
-  if (!position?.top || !position?.left) return null;
-
-  const cursorColor = stringToColor(username);
-  const isIdle = Date.now() - lastActive > 5000; // 5 seconds idle threshold
-
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        pointerEvents: 'none',
-        zIndex: 50,
-        transform: 'translate(-2px, 0)',
-        top: `${position.top}px`,
-        left: `${position.left}px`,
-        opacity: isIdle ? 0.5 : 1,
-        transition: 'opacity 0.3s ease'
-      }}
-    >
-      <div 
-        className={`w-0.5 h-5 ${isTyping ? 'animate-pulse' : ''}`}
-        style={{ 
-          backgroundColor: cursorColor,
-          boxShadow: `0 0 4px ${cursorColor}`
-        }} 
-      />
-      <div 
-        className={`absolute left-0 -top-6 flex items-center space-x-1 whitespace-nowrap 
-          px-2 py-1 rounded text-white text-xs transition-all duration-200 
-          ${isFocused ? 'ring-2 ring-white/20' : ''}`}
-        style={{ 
-          backgroundColor: cursorColor,
-          boxShadow: `0 0 4px ${cursorColor}88`,
-        }}
-      >
-        <span>{username}</span>
-        {isTyping && (
-          <span className="flex space-x-1">
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-          </span>
-        )}
-        {isFocused && !isTyping && (
-          <span className="text-[10px] text-white/80">active</span>
-        )}
-      </div>
-    </div>
-  );
+  
+  return Decoration.mark({
+    attributes: { 
+      class: `remote-selection-${userId}`,
+      style: `background-color: ${color}`
+    },
+    inclusive: true
+  }).range(from, to);
 };
 
 export const CodeEditor = ({
-  code = '',
+  code,
   language,
   onChange,
   onCursorActivity,
   isUserMuted,
-  cursors = new Map(),
+  cursors,
   fontSize = 'medium',
   theme = 'dark',
   socket,
@@ -78,133 +100,162 @@ export const CodeEditor = ({
   getLanguageExtension,
 }) => {
   const editorRef = useRef(null);
-  const cursorUpdateTimeoutRef = useRef(null);
-  const [focusedUsers, setFocusedUsers] = useState(new Set());
-  const [lastActivity, setLastActivity] = useState({});
-  const [isTyping, setIsTyping] = useState(false);
-  const typingTimeoutRef = useRef(null);
+  const cursorSyncTimeout = useRef(null);
+  const selectionSyncTimeout = useRef(null);
+
+  // Remote cursor sync handler
+  const handleRemoteCursorUpdate = useCallback((view, changes) => {
+    if (!socket || !roomId) return;
   
-  // Convert cursor positions from CodeMirror coordinates to screen coordinates
-  const convertCursorPosition = useCallback((view, pos) => {
-    const editorRect = view.dom.getBoundingClientRect();
-    const coords = view.coordsAtPos(pos);
-    
-    if (!coords) return null;
-    
-    return {
-      top: coords.top - editorRect.top,
-      left: coords.left - editorRect.left,
-    };
-  }, []);
-
-  // Handle cursor position updates with typing indicator
-  const handleCursorActivity = useCallback((view) => {
-    if (cursorUpdateTimeoutRef.current) {
-      clearTimeout(cursorUpdateTimeoutRef.current);
+    if (cursorSyncTimeout.current) {
+      clearTimeout(cursorSyncTimeout.current);
     }
-
-    // Update typing state
-    setIsTyping(true);
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-    typingTimeoutRef.current = setTimeout(() => {
-      setIsTyping(false);
-    }, 1500);
-
-    cursorUpdateTimeoutRef.current = setTimeout(() => {
-      const selection = view.state.selection.main;
-      const pos = convertCursorPosition(view, selection.head);
+  
+    cursorSyncTimeout.current = setTimeout(() => {
+      const position = view.state.selection.main.head;
+      const docLength = view.state.doc.length;
       
-      if (pos) {
-        const userId = localStorage.getItem('userId');
-        setLastActivity(prev => ({
-          ...prev,
-          [userId]: Date.now()
-        }));
-        
-        onCursorActivity?.({
-          position: pos,
-          isTyping: true,
-          lastActive: Date.now()
-        });
-      }
-    }, 50);
-  }, [onCursorActivity, convertCursorPosition]);
-
-  // Handle focus events
-  const handleFocus = useCallback(() => {
-    if (!socket || !roomId) return;
-
-    const userId = localStorage.getItem('userId');
-    const username = localStorage.getItem('username');
-
-    socket.emit('focus_change', {
-      roomId,
-      userId,
-      username,
-      status: 'focusing'
-    });
-    
-    setFocusedUsers(prev => new Set([...prev, userId]));
-    setLastActivity(prev => ({
-      ...prev,
-      [userId]: Date.now()
-    }));
-  }, [socket, roomId]);
-
-  const handleBlur = useCallback(() => {
-    if (!socket || !roomId) return;
-
-    const userId = localStorage.getItem('userId');
-    socket.emit('focus_change', {
-      roomId,
-      userId,
-      status: 'blur'
-    });
-    
-    setFocusedUsers(prev => {
-      const next = new Set(prev);
-      next.delete(userId);
-      return next;
-    });
-  }, [socket, roomId]);
-
-  // Listen for focus change events from other users
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleFocusChange = ({ userId, status }) => {
-      setFocusedUsers(prev => {
-        const next = new Set(prev);
-        if (status === 'focusing') {
-          next.add(userId);
-        } else {
-          next.delete(userId);
-        }
-        return next;
+      // Ensure position is within bounds
+      const safePosition = Math.min(position, docLength);
+      
+      socket.emit('cursor_activity', {
+        roomId,
+        userId: localStorage.getItem('userId'),
+        username: localStorage.getItem('username'),
+        position: safePosition,
+        isTyping: changes?.docChanged || false
       });
-    };
+    }, 50);
+  }, [socket, roomId]);
 
-    socket.on('focus_change', handleFocusChange);
-    return () => {
-      socket.off('focus_change', handleFocusChange);
-    };
-  }, [socket]);
+  // Remote selection sync handler
+  const handleRemoteSelectionUpdate = useCallback((view) => {
+    if (!socket || !roomId) return;
+  
+    if (selectionSyncTimeout.current) {
+      clearTimeout(selectionSyncTimeout.current);
+    }
+  
+    selectionSyncTimeout.current = setTimeout(() => {
+      const selection = view.state.selection;
+      const docLength = view.state.doc.length;
+      
+      const ranges = selection.ranges.map(range => ({
+        from: Math.min(range.from, docLength),
+        to: Math.min(range.to, docLength)
+      }));
+  
+      socket.emit('selection_update', {
+        roomId,
+        userId: localStorage.getItem('userId'),
+        ranges
+      });
+    }, 50);
+  }, [socket, roomId]);
 
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (cursorUpdateTimeoutRef.current) {
-        clearTimeout(cursorUpdateTimeoutRef.current);
+  // Editor configuration and extensions
+  const extensions = useMemo(() => [
+    getLanguageExtension(language),
+    remoteSelectionField,
+    ViewPlugin.fromClass(class {
+      update(update) {
+        if (update.docChanged) {
+          handleRemoteCursorUpdate(update.view, update.changes);
+        }
+        if (update.selectionSet) {
+          handleRemoteSelectionUpdate(update.view);
+        }
       }
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
+    }),
+    EditorView.theme({
+      "&": {
+        height: "100%",
+      },
+      ".cm-scroller": {
+        fontFamily: "MonoLisa, Menlo, Monaco, 'Courier New', monospace",
+        overflow: "auto",
+      },
+      ".cm-content": {
+        padding: "1rem 0",
+        minHeight: "100%"
+      },
+      ".remote-selection": {
+        backgroundColor: "rgba(250, 129, 0, .4)",
+        borderRadius: "2px"
+      },
+      ".remote-cursor": {
+        borderLeft: "2px solid currentColor",
+        marginLeft: "-1px"
       }
-    };
+    })
+  ], [language, handleRemoteCursorUpdate, handleRemoteSelectionUpdate, getLanguageExtension]);
+
+  // Handle remote cursor and selection updates
+
+  const handleSelectionUpdate = useCallback(({ userId, ranges }) => {
+    if (userId === localStorage.getItem('userId')) return;
+  
+    const view = editorRef.current?.view;
+    if (!view) return;
+  
+    // Get current document length 
+    const docLength = view.state.doc.length;
+  
+    if (!ranges?.length) {
+      // Handle selection clear
+      view.dispatch({
+        effects: [removeRemoteSelection.of(userId)]
+      });
+      return;
+    }
+    
+    // Validate and sanitize ranges
+    const validRanges = ranges.map(range => ({
+      from: Math.min(Math.max(0, range.from), docLength),
+      to: Math.min(Math.max(0, range.to), docLength)
+    }));
+  
+    // Generate unique color for user
+    const color = `hsla(${userId.split('').reduce((a, b) => a + b.charCodeAt(0), 0) % 360}, 70%, 50%, 0.4)`;
+  
+    view.dispatch({
+      effects: [
+        addRemoteSelection.of({
+          from: validRanges[0].from,
+          to: validRanges[0].to,
+          userId,
+          color
+        })
+      ]
+    });
   }, []);
 
-  // Font size classes
+  useEffect(() => {
+  if (!socket || !editorRef.current) return;
+
+  socket.on('selection_update', handleSelectionUpdate);
+  socket.on('selection_clear', ({ userId }) => {
+    if (editorRef.current?.view) {
+      editorRef.current.view.dispatch({
+        effects: [removeRemoteSelection.of(userId)]
+      });
+    }
+  });
+
+  return () => {
+    socket.off('selection_update', handleSelectionUpdate);
+    socket.off('selection_clear');
+  };
+}, [socket, handleSelectionUpdate]);
+
+    socket.on('selection_clear', ({ userId }) => {
+    if (editorRef.current?.view) {
+      editorRef.current.view.dispatch({
+        effects: [removeRemoteSelection.of(userId)]
+      });
+    }
+  });
+
   const fontSizeClass = useMemo(() => {
     switch (fontSize) {
       case 'small': return 'text-sm';
@@ -214,32 +265,26 @@ export const CodeEditor = ({
   }, [fontSize]);
 
   return (
-    <div className="relative h-full group">
+    <div className="relative h-full flex flex-col">
       {isUserMuted && (
-        <div className="absolute inset-0 bg-gray-900/50 backdrop-blur-sm z-50 flex items-center justify-center">
-          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center">
-            <p className="text-yellow-400 font-medium">You are currently muted</p>
-            <p className="text-gray-400 text-sm mt-1">The interviewer has temporarily disabled your ability to edit</p>
+        <div className="absolute inset-0 bg-gray-900/50 backdrop-blur-sm z-50 
+          flex items-center justify-center">
+          <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <p className="text-yellow-400">You are currently muted</p>
           </div>
         </div>
       )}
 
-      <div ref={editorRef} className="relative h-full">
+      <div className="flex-1 min-h-0 relative">
         <CodeMirror
+          ref={editorRef}
           value={code}
           height="100%"
-          theme={theme === 'dark' ? vscodeDark : vscodeLight}
-          extensions={[getLanguageExtension(language)]}
+          theme={theme === 'dark' ? vscodeDark : undefined}
+          extensions={extensions}
           onChange={onChange}
           editable={!isUserMuted}
-          onFocus={handleFocus}
-          onBlur={handleBlur}
-          onUpdate={(viewUpdate) => {
-            if (viewUpdate.selectionSet) {
-              handleCursorActivity(viewUpdate.view);
-            }
-          }}
-          className={`h-full ${fontSizeClass} transition-all duration-200`}
+          className={`h-full ${fontSizeClass}`}
           basicSetup={{
             lineNumbers: true,
             highlightActiveLineGutter: true,
@@ -265,27 +310,20 @@ export const CodeEditor = ({
             lintKeymap: true,
           }}
         />
-        
+
+        {/* Remote Cursors Overlay */}
         <div className="absolute inset-0 pointer-events-none">
-          {Array.from(cursors.entries()).map(([userId, { username, position, isTyping: remoteIsTyping }]) => (
+          {Array.from(cursors.entries()).map(([userId, cursor]) => (
             userId !== localStorage.getItem('userId') && (
-              <RemoteCursor
+              <EditorCursor
                 key={userId}
-                position={position}
-                username={username}
-                isTyping={remoteIsTyping}
-                isFocused={focusedUsers.has(userId)}
-                lastActive={lastActivity[userId] || Date.now()}
+                userId={userId}
+                username={cursor.username}
+                position={cursor.position}
+                isTyping={cursor.isTyping}
               />
             )
           ))}
-        </div>
-      </div>
-
-      {/* Character count with hover effect */}
-      <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-        <div className="text-xs text-gray-400 bg-gray-800/80 px-2 py-1 rounded cursor-help">
-          {code.length} characters
         </div>
       </div>
     </div>

@@ -203,6 +203,7 @@ app.post('/api/analyze', async (req, res) => {
       2. Potential bugs or issues
       3. Time and space complexity (if applicable)
       4. Suggestions for improvement
+      5. Follow up questions you would ask the candidate
       
       Code to analyze:
       \`\`\`${language}
@@ -227,6 +228,24 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
+// Helpers for viewport and cursors
+const roomCursors = new Map();
+const roomViewports = new Map();
+
+function getCursorPositions(roomId) {
+  if (!roomCursors.has(roomId)) {
+    roomCursors.set(roomId, new Map());
+  }
+  return roomCursors.get(roomId);
+}
+
+function getViewportPositions(roomId) {
+  if (!roomViewports.has(roomId)) {
+    roomViewports.set(roomId, new Map());
+  }
+  return roomViewports.get(roomId);
+}
+
 // Socket.IO event handlers
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -245,21 +264,39 @@ io.on('connection', (socket) => {
       if (existingParticipant) {
         // They're reconnecting! Welcome back! 🎉
         existingParticipant.disconnectedAt = null;
+        existingParticipant.socketId = socket.id;
         await room.save();
         
-        socket.to(roomId).emit('user_reconnected', { userId, username });
+        socket.to(roomId).emit('user_reconnected', { 
+          userId, 
+          username,
+          participant: existingParticipant 
+        });
       } else {
         // New participant
-        room.participants.push({
+        const newParticipant = {
           userId,
           username,
           isCreator,
-          joinedAt: new Date()
-        });
+          joinedAt: new Date(),
+          socketId: socket.id
+        };
+        
+        room.participants.push(newParticipant);
         await room.save();
         
-        socket.to(roomId).emit('user_joined', { userId, username });
+        socket.to(roomId).emit('user_joined', { 
+          userId, 
+          username,
+          participant: newParticipant 
+        });
       }
+
+      socket.to(roomId).emit('viewport_update', {
+        userId,
+        from: 0,
+        to: 1000 // Default viewport size
+      });
 
       // Set socket properties
       socket.userId = userId;
@@ -273,7 +310,19 @@ io.on('connection', (socket) => {
       socket.emit('room_state', {
         code: room.content,
         language: room.language,
-        participants: room.participants
+        participants: room.participants.map(p => ({
+          userId: p.userId,
+          username: p.username,
+          isCreator: p.isCreator,
+          joinedAt: p.joinedAt,
+          // Only send active participants
+          isActive: !p.disconnectedAt
+        })),
+        cursors: Array.from(getCursorPositions(roomId).entries()).map(([uid, data]) => ({
+          userId: uid,
+          ...data
+        })),
+        viewports: Array.from(getViewportPositions(roomId).entries())
       });
 
       // Track analytics
@@ -282,7 +331,8 @@ io.on('connection', (socket) => {
         userId,
         username,
         isCreator,
-        isReconnection: !!existingParticipant
+        isReconnection: !!existingParticipant,
+        participantCount: room.participants.length
       });
 
     } catch (error) {
@@ -363,6 +413,32 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('viewport_update', ({ roomId, userId, from, to }) => {
+    // Forward viewport update to all other users in the room
+    socket.to(roomId).emit('viewport_update', {
+      userId,
+      from,
+      to
+    });
+  });
+  
+  socket.on('selection_update', ({ roomId, userId, ranges }) => {
+    // Forward selection update to all other users in the room
+    socket.to(roomId).emit('selection_update', {
+      userId,
+      ranges
+    });
+  });
+  
+  socket.on('cursor_activity', ({ roomId, userId, username, position, isTyping }) => {
+    socket.to(roomId).emit('cursor_update', {
+      userId,
+      username,
+      position,
+      isTyping
+    });
+  });
+
   socket.on('kick_user', async ({ roomId, userId }) => {
     try {
       const room = await getRoom(roomId);
@@ -395,23 +471,34 @@ io.on('connection', (socket) => {
       try {
         const room = await Room.findOne({ roomId: socket.currentRoom });
         if (room) {
-          // Mark participant as disconnected instead of removing
-          const participant = room.participants.find(p => p.userId === socket.userId);
+          // Mark participant as disconnected
+          const participant = room.participants.find(p => p.socketId === socket.id);
           if (participant) {
             participant.disconnectedAt = new Date();
             await room.save();
+  
+            // Clear cursor and viewport data
+            const cursors = getCursorPositions(socket.currentRoom);
+            const viewports = getViewportPositions(socket.currentRoom);
+            cursors.delete(participant.userId);
+            viewports.delete(participant.userId);
+            
+            socket.to(socket.currentRoom).emit('user_disconnected', {
+              userId: participant.userId,
+              username: participant.username,
+              temporary: true
+            });
+            
+            await trackAnalytics('user_disconnected', {
+              roomId: socket.currentRoom,
+              userId: participant.userId,
+              username: participant.username,
+              participantCount: room.participants.filter(p => !p.disconnectedAt).length
+            });
+  
+            // Schedule room cleanup if needed
+            setTimeout(() => cleanupEmptyRoom(socket.currentRoom), 5 * 60 * 1000);
           }
-          
-          socket.to(socket.currentRoom).emit('user_disconnected', {
-            userId: socket.userId,
-            temporary: true
-          });
-          
-          await trackAnalytics('user_disconnected', {
-            roomId: socket.currentRoom,
-            userId: socket.userId,
-            username: socket.username
-          });
         }
       } catch (error) {
         console.error('Disconnect error:', error);
