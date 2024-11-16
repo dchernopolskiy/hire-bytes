@@ -1,59 +1,52 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 export const useCodeSync = (socket, roomId) => {
   const [code, setCode] = useState('// Start coding here');
   const [language, setLanguage] = useState('javascript');
-  const [syncState, setSyncState] = useState('synchronized'); // synchronized, syncing, error
-  const [lastSyncedVersion, setLastSyncedVersion] = useState(0);
+  const [syncState, setSyncState] = useState('synchronized');
   const [pendingChanges, setPendingChanges] = useState([]);
+  const [lastSyncedVersion, setLastSyncedVersion] = useState(0);
+  const initialLoadRef = useRef(false);
 
   // Handle incoming code updates
   useEffect(() => {
     if (!socket) return;
 
-    const handleCodeUpdate = (newCode) => {
-      setCode(newCode);
-      setLastSyncedVersion(prev => prev + 1);
-      setSyncState('synchronized');
-    };
-
-    const handleLanguageChange = (newLanguage) => {
-      setLanguage(newLanguage);
-    };
-
-    // Reconnection handling
-    const handleReconnect = async () => {
-      setSyncState('syncing');
-      try {
-        socket.emit('request_code_state', { roomId });
-      } catch (error) {
-        console.error('Failed to request code state:', error);
-        setSyncState('error');
+    const handleRoomState = (state) => {
+      if (!initialLoadRef.current && state.code) {
+        setCode(state.code);
+        setLanguage(state.language);
+        initialLoadRef.current = true;
+        setLastSyncedVersion(0); // Reset version on initial load
       }
     };
 
+    const handleCodeUpdate = (newCode) => {
+      if (initialLoadRef.current) {
+        setCode(newCode);
+        setLastSyncedVersion(prev => prev + 1);
+        setSyncState('synchronized');
+      }
+    };
+
+    socket.on('room_state', handleRoomState);
     socket.on('receive_code', handleCodeUpdate);
-    socket.on('language_changed', handleLanguageChange);
-    socket.on('reconnect', handleReconnect);
 
     return () => {
+      socket.off('room_state', handleRoomState);
       socket.off('receive_code', handleCodeUpdate);
-      socket.off('language_changed', handleLanguageChange);
-      socket.off('reconnect', handleReconnect);
     };
-  }, [socket, roomId]);
+  }, [socket]);
 
   // Debounced code change handler
   const handleCodeChange = useCallback((newCode) => {
+    if (!initialLoadRef.current) return;
+    
     setCode(newCode);
-    socket?.emit('code_change', { roomId, code: newCode });
-
-    // Add change to pending changes
     setPendingChanges(prev => [...prev, { code: newCode, timestamp: Date.now() }]);
 
-    // Emit code change to server with version tracking
-    socket?.emit('code_change', {
-      roomId,
+    socket?.emit('code_change', { 
+      roomId, 
       code: newCode,
       version: lastSyncedVersion + 1
     });
@@ -74,7 +67,6 @@ export const useCodeSync = (socket, roomId) => {
       const oldestPending = pendingChanges[0];
 
       if (oldestPending && now - oldestPending.timestamp > 5000) {
-        // If changes are pending for too long, request resync
         socket.emit('request_code_state', { roomId });
         setPendingChanges([]);
       }

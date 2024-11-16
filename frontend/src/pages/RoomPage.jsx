@@ -121,12 +121,14 @@ export default function RoomPage() {
 
   // Logging
   useEffect(() => {
-    console.log('Room state:', {
-      isJoined,
-      socketConnected: !!socket,
-      participants,
-      code
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Room state:', {
+        isJoined,
+        socketConnected: !!socket,
+        participantCount: participants.length,
+        codeLength: code.length
+      });
+    }
   }, [isJoined, socket, participants, code]);
 
   // Code analysis handler with rate limiting

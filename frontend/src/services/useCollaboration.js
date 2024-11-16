@@ -11,40 +11,34 @@ export const useCollaboration = (socket, roomId) => {
   // Track active participants
   useEffect(() => {
     if (!socket) return;
-
-    const handleUserJoined = ({ userId, username }) => {
-      setParticipants(prev => [...prev, { userId, username, joinedAt: new Date() }]);
-      addNotification(`${username} joined the room`);
-    };
-
-    const handleUserLeft = (userId) => {
-      setParticipants(prev => {
-        const user = prev.find(p => p.userId === userId);
-        if (user) {
-          addNotification(`${user.username} left the room`);
-        }
-        return prev.filter(p => p.userId !== userId);
-      });
-
-      // Clean up user's cursor and selections
+  
+    const handleCursorUpdate = (data) => {
+      console.log('Collaboration hook received cursor_update:', data);
+      
+      if (data.userId === localStorage.getItem('userId')) {
+        console.log('Ignoring own cursor update');
+        return;
+      }
+  
       setCursors(prev => {
         const next = new Map(prev);
-        next.delete(userId);
-        return next;
-      });
-      setActiveSelections(prev => {
-        const next = new Map(prev);
-        next.delete(userId);
+        next.set(data.userId, {
+          username: data.username,
+          position: data.position,
+          isTyping: data.isTyping,
+          timestamp: Date.now()
+        });
+        console.log('Updated cursors map:', Array.from(next.entries()));
         return next;
       });
     };
-
-    socket.on('user_joined', handleUserJoined);
-    socket.on('user_left', handleUserLeft);
-
+  
+    console.log('Setting up cursor_update listener');
+    socket.on('cursor_update', handleCursorUpdate);
+  
     return () => {
-      socket.off('user_joined', handleUserJoined);
-      socket.off('user_left', handleUserLeft);
+      console.log('Cleaning up cursor_update listener');
+      socket.off('cursor_update', handleCursorUpdate);
     };
   }, [socket]);
 
@@ -78,23 +72,26 @@ export const useCollaboration = (socket, roomId) => {
   useEffect(() => {
     if (!socket) return;
 
-    const handleCursorUpdate = ({ userId, username, position, isTyping }) => {
+    const handleCursorUpdate = (data) => {
+      console.log('Collaboration hook received cursor update:', data);
       setCursors(prev => {
         const next = new Map(prev);
-        const existing = next.get(userId) || {};
-        next.set(userId, {
-          ...existing,
-          username,
-          position,
-          isTyping,
+        next.set(data.userId, {
+          username: data.username,
+          position: data.position,
+          isTyping: data.isTyping,
           timestamp: Date.now()
         });
+        console.log('Updated cursors map:', Array.from(next.entries()));
         return next;
       });
     };
 
     socket.on('cursor_update', handleCursorUpdate);
-    return () => socket.off('cursor_update', handleCursorUpdate);
+
+    return () => {
+      socket.off('cursor_update', handleCursorUpdate);
+    };
   }, [socket]);
 
   // Handle selection sync

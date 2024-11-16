@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useEffect, useRef } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
-import { javascript } from '@codemirror/lang-javascript';
 import { ViewPlugin, Decoration, EditorView } from '@codemirror/view';
 import { StateField, StateEffect } from '@codemirror/state';
 import { EditorCursor } from './CursorManager';
@@ -16,25 +15,20 @@ const remoteSelectionField = StateField.define({
     return Decoration.none;
   },
   update(selections, tr) {
-    // If there are document changes, we need to carefully map the selections
     if (tr.docChanged) {
       try {
         selections = selections.map(tr.changes);
       } catch (err) {
-        console.warn('Failed to map selections:', err);
-        return Decoration.none; // Reset selections if mapping fails
+        return Decoration.none;
       }
     }
 
-    // Handle selection effects
     for (let effect of tr.effects) {
       if (effect.is(addRemoteSelection)) {
         const { from, to, userId, color } = effect.value;
         
-        // Validate positions are within document bounds
         const docLength = tr.state.doc.length;
-        if (from > docLength || to > docLength) {
-          console.warn('Selection out of bounds:', { from, to, docLength });
+        if (from >= docLength || to > docLength) {
           continue;
         }
 
@@ -48,15 +42,7 @@ const remoteSelectionField = StateField.define({
             })]
           });
         } catch (err) {
-          console.warn('Failed to add selection:', err);
-        }
-      } else if (effect.is(removeRemoteSelection)) {
-        try {
-          selections = selections.update({
-            filter: (from, to, value) => value.id !== effect.value
-          });
-        } catch (err) {
-          console.warn('Failed to remove selection:', err);
+          continue;
         }
       }
     }
@@ -66,7 +52,6 @@ const remoteSelectionField = StateField.define({
 });
 
 const createRemoteSelection = ({ from, to, userId, color }) => {
-  // Ensure valid range and default to cursor position if no selection
   if (from === to || !from || !to) {
     return Decoration.mark({
       attributes: { 
@@ -74,7 +59,7 @@ const createRemoteSelection = ({ from, to, userId, color }) => {
         style: `background-color: ${color}`
       },
       inclusive: true
-    }).range(from, from + 1); // Make it a 1-character selection
+    }).range(from, from + 1);
   }
   
   return Decoration.mark({
@@ -98,34 +83,102 @@ export const CodeEditor = ({
   socket,
   roomId,
   getLanguageExtension,
+  setCursors
 }) => {
   const editorRef = useRef(null);
   const cursorSyncTimeout = useRef(null);
   const selectionSyncTimeout = useRef(null);
 
-  // Remote cursor sync handler
-  const handleRemoteCursorUpdate = useCallback((view, changes) => {
-    if (!socket || !roomId) return;
+  // Debug mounting
+  useEffect(() => {
+    console.log('CodeEditor mounted with:', {
+      socketId: socket?.id,
+      socketConnected: socket?.connected,
+      roomId,
+      cursorCount: cursors.size,
+      cursorsEntries: Array.from(cursors.entries())
+    });
+  }, [socket, roomId, cursors]);
+
+  // Handle cursor selection updates
+  const handleSelectionUpdate = useCallback(({ userId, ranges }) => {
+    if (userId === localStorage.getItem('userId')) return;
   
-    if (cursorSyncTimeout.current) {
-      clearTimeout(cursorSyncTimeout.current);
+    const view = editorRef.current?.view;
+    if (!view) return;
+  
+    const docLength = view.state.doc.length;
+  
+    view.dispatch({
+      effects: [removeRemoteSelection.of(userId)]
+    });
+  
+    if (!ranges?.length || (ranges[0].from === ranges[0].to)) {
+      return;
     }
   
-    cursorSyncTimeout.current = setTimeout(() => {
-      const position = view.state.selection.main.head;
-      const docLength = view.state.doc.length;
+    const validRanges = ranges.map(range => ({
+      from: Math.min(Math.max(0, range.from), docLength),
+      to: Math.min(Math.max(0, range.to), docLength)
+    }));
+  
+    if (validRanges[0].from !== validRanges[0].to) {
+      const color = `hsla(${userId.split('').reduce((a, b) => a + b.charCodeAt(0), 0) % 360}, 70%, 50%, 0.4)`;
       
-      // Ensure position is within bounds
-      const safePosition = Math.min(position, docLength);
-      
-      socket.emit('cursor_activity', {
-        roomId,
-        userId: localStorage.getItem('userId'),
-        username: localStorage.getItem('username'),
-        position: safePosition,
-        isTyping: changes?.docChanged || false
+      view.dispatch({
+        effects: [
+          addRemoteSelection.of({
+            from: validRanges[0].from,
+            to: validRanges[0].to,
+            userId,
+            color
+          })
+        ]
       });
-    }, 50);
+    }
+  }, []);
+
+  // Remote cursor sync handler
+  const handleRemoteCursorUpdate = useCallback((view, changes) => {
+    try {
+      if (!socket?.connected || !roomId) return;
+
+      if (cursorSyncTimeout.current) {
+        clearTimeout(cursorSyncTimeout.current);
+      }
+
+      cursorSyncTimeout.current = setTimeout(() => {
+        const position = view.state.selection.main.head;
+        const coords = view.coordsAtPos(position);
+        if (!coords) return;
+        
+        const editorElement = view.dom;
+        const editorRect = editorElement.getBoundingClientRect();
+        const scrollInfo = {
+          top: view.scrollDOM.scrollTop,
+          left: view.scrollDOM.scrollLeft
+        };
+        
+        const cursorData = {
+          roomId,
+          userId: localStorage.getItem('userId'),
+          username: localStorage.getItem('username'),
+          position: {
+            index: position,
+            x: coords.x - editorRect.left,
+            y: coords.y - editorRect.top,
+            top: coords.top - editorRect.top,
+            left: coords.left - editorRect.left,
+            scroll: scrollInfo
+          },
+          isTyping: changes?.docChanged || false
+        };
+        
+        socket.emit('cursor_activity', cursorData);
+      }, 50);
+    } catch (error) {
+      console.error('Error in cursor update:', error);
+    }
   }, [socket, roomId]);
 
   // Remote selection sync handler
@@ -153,7 +206,7 @@ export const CodeEditor = ({
     }, 50);
   }, [socket, roomId]);
 
-  // Editor configuration and extensions
+  // Editor extensions
   const extensions = useMemo(() => [
     getLanguageExtension(language),
     remoteSelectionField,
@@ -168,9 +221,7 @@ export const CodeEditor = ({
       }
     }),
     EditorView.theme({
-      "&": {
-        height: "100%",
-      },
+      "&": { height: "100%" },
       ".cm-scroller": {
         fontFamily: "MonoLisa, Menlo, Monaco, 'Courier New', monospace",
         overflow: "auto",
@@ -190,71 +241,51 @@ export const CodeEditor = ({
     })
   ], [language, handleRemoteCursorUpdate, handleRemoteSelectionUpdate, getLanguageExtension]);
 
-  // Handle remote cursor and selection updates
-
-  const handleSelectionUpdate = useCallback(({ userId, ranges }) => {
-    if (userId === localStorage.getItem('userId')) return;
-  
-    const view = editorRef.current?.view;
-    if (!view) return;
-  
-    // Get current document length 
-    const docLength = view.state.doc.length;
-  
-    if (!ranges?.length) {
-      // Handle selection clear
-      view.dispatch({
-        effects: [removeRemoteSelection.of(userId)]
-      });
-      return;
-    }
-    
-    // Validate and sanitize ranges
-    const validRanges = ranges.map(range => ({
-      from: Math.min(Math.max(0, range.from), docLength),
-      to: Math.min(Math.max(0, range.to), docLength)
-    }));
-  
-    // Generate unique color for user
-    const color = `hsla(${userId.split('').reduce((a, b) => a + b.charCodeAt(0), 0) % 360}, 70%, 50%, 0.4)`;
-  
-    view.dispatch({
-      effects: [
-        addRemoteSelection.of({
-          from: validRanges[0].from,
-          to: validRanges[0].to,
-          userId,
-          color
-        })
-      ]
-    });
-  }, []);
-
+  // Handle cursor updates
   useEffect(() => {
-  if (!socket || !editorRef.current) return;
+    if (!socket) return;
 
-  socket.on('selection_update', handleSelectionUpdate);
-  socket.on('selection_clear', ({ userId }) => {
-    if (editorRef.current?.view) {
-      editorRef.current.view.dispatch({
-        effects: [removeRemoteSelection.of(userId)]
+    const handleCursorUpdate = (data) => {
+      console.log('Received cursor update:', data);
+      if (data.userId === localStorage.getItem('userId')) return;
+
+      setCursors(prev => {
+        const next = new Map(prev);
+        next.set(data.userId, {
+          username: data.username,
+          position: data.position,
+          isTyping: data.isTyping,
+          timestamp: Date.now()
+        });
+        return next;
       });
-    }
-  });
+    };
 
-  return () => {
-    socket.off('selection_update', handleSelectionUpdate);
-    socket.off('selection_clear');
-  };
-}, [socket, handleSelectionUpdate]);
+    socket.on('cursor_update', handleCursorUpdate);
 
+    return () => {
+      socket.off('cursor_update', handleCursorUpdate);
+    };
+  }, [socket, setCursors]);
+
+  // Handle selections
+  useEffect(() => {
+    if (!socket || !editorRef.current) return;
+
+    socket.on('selection_update', handleSelectionUpdate);
     socket.on('selection_clear', ({ userId }) => {
-    if (editorRef.current?.view) {
-      editorRef.current.view.dispatch({
-        effects: [removeRemoteSelection.of(userId)]
-      });
-    }
-  });
+      if (editorRef.current?.view) {
+        editorRef.current.view.dispatch({
+          effects: [removeRemoteSelection.of(userId)]
+        });
+      }
+    });
+
+    return () => {
+      socket.off('selection_update', handleSelectionUpdate);
+      socket.off('selection_clear');
+    };
+  }, [socket, handleSelectionUpdate]);
 
   const fontSizeClass = useMemo(() => {
     switch (fontSize) {
@@ -267,8 +298,7 @@ export const CodeEditor = ({
   return (
     <div className="relative h-full flex flex-col">
       {isUserMuted && (
-        <div className="absolute inset-0 bg-gray-900/50 backdrop-blur-sm z-50 
-          flex items-center justify-center">
+        <div className="absolute inset-0 bg-gray-900/50 backdrop-blur-sm z-50 flex items-center justify-center">
           <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
             <p className="text-yellow-400">You are currently muted</p>
           </div>
@@ -313,8 +343,8 @@ export const CodeEditor = ({
 
         {/* Remote Cursors Overlay */}
         <div className="absolute inset-0 pointer-events-none">
-          {Array.from(cursors.entries()).map(([userId, cursor]) => (
-            userId !== localStorage.getItem('userId') && (
+          {Array.from(cursors.entries()).map(([userId, cursor]) => {
+            return userId !== localStorage.getItem('userId') && (
               <EditorCursor
                 key={userId}
                 userId={userId}
@@ -322,8 +352,8 @@ export const CodeEditor = ({
                 position={cursor.position}
                 isTyping={cursor.isTyping}
               />
-            )
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

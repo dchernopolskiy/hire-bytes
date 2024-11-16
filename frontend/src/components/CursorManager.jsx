@@ -27,21 +27,20 @@ export class CursorManager {
   }
 
   // Update cursor position with viewport context
-  updateCursor(userId, username, pos, isTyping = false) {
+  updateCursor(userId, username, pos) {
     const coords = this.view.coordsAtPos(pos);
     if (!coords) return;
-
+  
     const line = this.view.state.doc.lineAt(pos);
-    this.cursors.set(userId, {
-      username,
-      position: {
-        top: coords.top,
-        left: coords.left,
-        line: line.number,
-        ch: pos - line.from,
+    console.log('Cursor position calculated:', {
+      userId,
+      coords,
+      lineInfo: {
+        number: line.number,
+        from: line.from,
+        to: line.to
       },
-      isTyping,
-      timestamp: Date.now()
+      editorRect: this.view.dom.getBoundingClientRect()
     });
   }
 
@@ -156,45 +155,66 @@ export const useCursorSync = (view, onCursorUpdate) => {
 
 // Cursor component
 export const EditorCursor = memo(({ userId, username, position, isTyping }) => {
-  const cursorColor = useMemo(() => generateUserColor(username), [username]);
+    const cursorRef = useRef(null);
+    const cursorColor = useMemo(() => generateUserColor(username), [username]);
+    
+    useEffect(() => {
+      if (!cursorRef.current) return;
   
-  return (
-    <div
-      className="absolute pointer-events-none z-50"
-      style={{
-        transform: 'translate(-2px, 0)',
-        top: `${position.top}px`,
-        left: `${position.left}px`,
-      }}
-    >
-      <div 
-        className={`w-0.5 h-5 ${isTyping ? 'animate-pulse' : ''}`}
-        style={{ 
-          backgroundColor: cursorColor,
-          boxShadow: `0 0 4px ${cursorColor}`
-        }} 
-      />
-      <div 
-        className="absolute left-0 -top-6 px-2 py-1 rounded text-white text-xs whitespace-nowrap"
-        style={{ 
-          backgroundColor: cursorColor,
-          boxShadow: `0 0 4px ${cursorColor}88`
+      // Get current editor scroll position
+      const editorView = document.querySelector('.cm-editor')?.querySelector('.cm-scroller');
+      if (!editorView) return;
+  
+      const currentScroll = {
+        top: editorView.scrollTop,
+        left: editorView.scrollLeft
+      };
+  
+      // Adjust position based on scroll difference
+      const adjustedTop = position.top - (position.scroll?.top || 0) + currentScroll.top;
+      const adjustedLeft = position.left - (position.scroll?.left || 0) + currentScroll.left;
+  
+      cursorRef.current.style.transform = `translate(${adjustedLeft}px, ${adjustedTop}px)`;
+    }, [position]);
+  
+    return (
+      <div
+        ref={cursorRef}
+        className="absolute pointer-events-none z-50"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0
         }}
       >
-        <span>{username}</span>
-        {isTyping && (
-          <span className="ml-1 flex space-x-0.5">
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" 
-              style={{ animationDelay: '0ms' }} />
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" 
-              style={{ animationDelay: '150ms' }} />
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" 
-              style={{ animationDelay: '300ms' }} />
-          </span>
-        )}
+        <div 
+          className={`w-0.5 h-5 ${isTyping ? 'animate-pulse' : ''}`}
+          style={{ 
+            backgroundColor: cursorColor,
+            boxShadow: `0 0 4px ${cursorColor}`
+          }} 
+        />
+        <div 
+          className="absolute left-0 -top-6 px-2 py-1 rounded text-white text-xs whitespace-nowrap"
+          style={{ 
+            backgroundColor: cursorColor,
+            boxShadow: `0 0 4px ${cursorColor}88`
+          }}
+        >
+          <span>{username}</span>
+          {isTyping && (
+            <span className="ml-1 flex space-x-0.5">
+              <span className="w-1 h-1 bg-white rounded-full animate-bounce" 
+                style={{ animationDelay: '0ms' }} />
+              <span className="w-1 h-1 bg-white rounded-full animate-bounce" 
+                style={{ animationDelay: '150ms' }} />
+              <span className="w-1 h-1 bg-white rounded-full animate-bounce" 
+                style={{ animationDelay: '300ms' }} />
+            </span>
+          )}
+        </div>
       </div>
-    </div>
-  );
-});
-
-EditorCursor.displayName = 'EditorCursor';
+    );
+  });
+  
+  EditorCursor.displayName = 'EditorCursor';

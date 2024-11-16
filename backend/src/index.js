@@ -249,6 +249,35 @@ function getViewportPositions(roomId) {
 // Socket.IO event handlers
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
+  
+  socket.onAny((eventName, ...args) => {
+    console.log('Received event:', eventName, 'with args:', args);
+  });
+
+  socket.on('cursor_activity', ({ roomId, userId, username, position, isTyping }) => {
+    console.log('Received cursor activity:', { roomId, userId, position });
+    // Save cursor position in room state
+    const cursors = getCursorPositions(roomId);
+    cursors.set(userId, {
+      username,
+      position,
+      isTyping,
+      timestamp: Date.now()
+    });
+
+    // Log before broadcast
+    console.log('About to broadcast to room:', roomId);
+    console.log('Current room cursors:', Array.from(cursors.entries()));
+
+    // Broadcast to everyone else in the room
+    socket.to(roomId).emit('cursor_update', {
+      userId,
+      username,
+      position,
+      isTyping
+    });
+    console.log('Broadcasted cursor update to room');
+  });
 
   socket.on('join_room', async ({ roomId, userId, username, isCreator }) => {
     try {
@@ -315,15 +344,25 @@ io.on('connection', (socket) => {
           username: p.username,
           isCreator: p.isCreator,
           joinedAt: p.joinedAt,
-          // Only send active participants
           isActive: !p.disconnectedAt
         })),
-        cursors: Array.from(getCursorPositions(roomId).entries()).map(([uid, data]) => ({
-          userId: uid,
-          ...data
-        })),
+        cursors: (() => {
+          const cursorPositions = getCursorPositions(roomId);
+          console.log('Current room cursors:', {
+            roomId,
+            cursorsMap: cursorPositions,
+            entriesArray: Array.from(cursorPositions.entries())
+          });
+          return Array.from(cursorPositions.entries()).map(([uid, data]) => {
+            console.log('Processing cursor for user:', uid, data);
+            return {
+              userId: uid,
+              ...data
+            };
+          });
+        })(),
         viewports: Array.from(getViewportPositions(roomId).entries())
-      });
+      });      
 
       // Track analytics
       await trackAnalytics('user_joined', {
@@ -431,14 +470,27 @@ io.on('connection', (socket) => {
   });
   
   socket.on('cursor_activity', ({ roomId, userId, username, position, isTyping }) => {
+    console.log('Server received cursor_activity:', { roomId, userId, position });
+    
+    // Save cursor position in room state
+    const cursors = getCursorPositions(roomId);
+    cursors.set(userId, {
+      username,
+      position,
+      isTyping,
+      timestamp: Date.now()
+    });
+  
+    // Broadcast to everyone else in the room
     socket.to(roomId).emit('cursor_update', {
       userId,
       username,
       position,
       isTyping
     });
+    console.log('Server broadcasted cursor_update');
   });
-
+  
   socket.on('kick_user', async ({ roomId, userId }) => {
     try {
       const room = await getRoom(roomId);
@@ -483,10 +535,15 @@ io.on('connection', (socket) => {
             cursors.delete(participant.userId);
             viewports.delete(participant.userId);
             
+            // Notify others about disconnection and clear selections
             socket.to(socket.currentRoom).emit('user_disconnected', {
               userId: participant.userId,
               username: participant.username,
               temporary: true
+            });
+  
+            socket.to(socket.currentRoom).emit('selection_clear', {
+              userId: participant.userId
             });
             
             await trackAnalytics('user_disconnected', {

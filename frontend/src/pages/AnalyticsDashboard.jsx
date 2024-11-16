@@ -1,36 +1,26 @@
+// CAD - Claude Assisted Development
 import { useState, useEffect, useMemo } from 'react';
 import { 
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Area, AreaChart 
 } from 'recharts';
 import { 
-  Calendar, Clock, Users, Code2, Brain, Loader2,
-  TrendingUp, Languages, Activity, ArrowUpRight
+  Clock, Users, Code2, Brain, Loader2, RefreshCw,
+  Activity, ArrowUpRight, Terminal, GitBranch
 } from 'lucide-react';
 
 const COLORS = {
-  primary: '#3b82f6',
-  secondary: '#10b981',
-  accent: '#8b5cf6',
-  error: '#ef4444',
-  warning: '#f59e0b',
-  success: '#059669',
-  chart: ['#3b82f6', '#10b981', '#8b5cf6', '#ef4444', '#f59e0b', '#06b6d4']
+  primary: '#3b82f6',   // Blue
+  secondary: '#10b981', // Green
+  accent: '#8b5cf6',    // Purple
+  gray: '#4b5563',      // Subtle gray
+  chart: ['#3b82f6', '#10b981', '#8b5cf6', '#ec4899', '#f59e0b']
 };
 
 const formatDuration = (ms) => {
   const minutes = Math.floor(ms / 60000);
   const hours = Math.floor(minutes / 60);
   return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
-};
-
-const formatDate = (isoString) => {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(isoString));
 };
 
 const StatCard = ({ icon: Icon, label, value, trend, description }) => (
@@ -79,7 +69,11 @@ const CustomTooltip = ({ active, payload, label }) => {
       <p className="text-sm font-medium">{label}</p>
       {payload.map((entry, index) => (
         <p key={index} className="text-sm" style={{ color: entry.color }}>
-          {entry.name}: {entry.value}
+          {entry.name}: {
+            entry.dataKey === 'avgCodingTime' ? 
+              formatDuration(entry.value) : 
+              entry.value
+          }
         </p>
       ))}
     </div>
@@ -87,44 +81,34 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 const ActivityItem = ({ activity }) => {
-  const getIcon = (type) => {
+  const getIconAndColor = (type) => {
     switch (type) {
-      case 'room_created': return Calendar;
-      case 'code_analyzed': return Brain;
-      case 'language_changed': return Code2;
-      default: return Activity;
+      case 'code_change':
+        return { Icon: Code2, color: 'text-blue-400' };
+      case 'code_analyzed':
+        return { Icon: Brain, color: 'text-purple-400' };
+      case 'language_changed':
+        return { Icon: Terminal, color: 'text-green-400' };
+      default:
+        return { Icon: Activity, color: 'text-gray-400' };
     }
   };
 
-  const getColor = (type) => {
-    switch (type) {
-      case 'room_created': return 'text-blue-400';
-      case 'code_analyzed': return 'text-orange-400';
-      case 'language_changed': return 'text-green-400';
-      default: return 'text-gray-400';
-    }
-  };
-
-  const Icon = getIcon(activity.type);
-  const colorClass = getColor(activity.type);
+  const { Icon, color } = getIconAndColor(activity.type);
 
   return (
     <div className="flex items-start gap-4 p-3 rounded-md hover:bg-gray-700/30">
-      <div className={`p-2 bg-gray-700 rounded ${colorClass}`}>
+      <div className={`p-2 bg-gray-700 rounded ${color}`}>
         <Icon className="w-4 h-4" />
       </div>
       <div>
-        <p className="text-sm">{formatActivityDescription(activity)}</p>
-        <p className="text-xs text-gray-400">{formatDate(activity.timestamp)}</p>
+        <p className="text-sm">{activity.description}</p>
+        <p className="text-xs text-gray-400">
+          {new Date(activity.timestamp).toLocaleTimeString()}
+        </p>
       </div>
     </div>
   );
-};
-
-const formatActivityDescription = (activity) => {
-  const eventName = activity.type.replace(/_/g, ' ');
-  const username = activity.username || `User ${activity.userId?.substring(0, 6)}`;
-  return `${username} ${eventName}`;
 };
 
 export default function AnalyticsDashboard() {
@@ -133,22 +117,20 @@ export default function AnalyticsDashboard() {
   const [timeRange, setTimeRange] = useState('7d');
   const [data, setData] = useState({
     overview: {
-      totalRooms: 0,
-      activeUsers: 0,
-      averageSessionDuration: 0,
-      totalCodeAnalyses: 0
+      activeRooms: 0,
+      totalParticipants: 0,
+      avgSessionDuration: 0,
+      avgCodingTimePerParticipant: 0
     },
     trends: [],
     languages: [],
-    dailyActivity: [],
-    recentActivity: [],
-    userRetention: [],
-    codeAnalytics: {
-      averageLength: 0,
-      totalLines: 0,
+    activity: [],
+    codingMetrics: {
+      avgSolutionTime: 0,
+      completionRate: 0,
       languageDistribution: []
     }
-  });
+  });  
 
   const fetchData = async () => {
     setLoading(true);
@@ -174,14 +156,6 @@ export default function AnalyticsDashboard() {
     const interval = setInterval(fetchData, 300000); // Refresh every 5 minutes
     return () => clearInterval(interval);
   }, [timeRange]);
-
-  const trends = useMemo(() => data.trends.map(trend => ({
-    ...trend,
-    date: new Date(trend.date).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric'
-    })
-  })), [data.trends]);
 
   if (error) {
     return (
@@ -217,48 +191,46 @@ export default function AnalyticsDashboard() {
               className="p-2 hover:bg-gray-800 rounded-md"
               title="Refresh data"
             >
-              <Loader2 className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
 
-        {/* Overview Stats */}
+        {/* Core Metrics */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard
-            icon={Calendar}
-            label="Total Rooms"
-            value={data.overview.totalRooms}
-            trend={12} // Example trend
-            description="Total rooms created"
-          />
-          <StatCard
             icon={Users}
-            label="Active Users"
-            value={data.overview.activeUsers}
-            trend={8}
-            description="Unique users in period"
+            label="Active Rooms"
+            value={data.overview.activeRooms}
+            description="Currently in progress"
           />
           <StatCard
             icon={Clock}
             label="Avg. Session"
-            value={formatDuration(data.overview.averageSessionDuration)}
-            description="Average session duration"
+            value={formatDuration(data.overview.avgSessionDuration)}
+            description="Interview duration"
+          />
+          <StatCard
+            icon={Code2}
+            label="Avg. Coding Time"
+            value={formatDuration(data.overview.avgCodingTimePerParticipant)}
+            description="Per participant"
           />
           <StatCard
             icon={Brain}
-            label="Code Analyses"
-            value={data.overview.totalCodeAnalyses}
-            trend={15}
-            description="AI analyses performed"
+            label="Code Reviews"
+            value={data.codingMetrics?.completionRate ?? 0}
+            description="AI analysis used"
           />
         </div>
 
-        {/* Charts Grid */}
+        {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <ChartCard title="Room Creation Trend">
-            <AreaChart data={trends}>
+          {/* Session Activity Trend */}
+          <ChartCard title="Interview Sessions">
+            <AreaChart data={data.trends}>
               <defs>
-                <linearGradient id="colorRooms" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id="colorSessions" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor={COLORS.primary} stopOpacity={0.1}/>
                   <stop offset="95%" stopColor={COLORS.primary} stopOpacity={0}/>
                 </linearGradient>
@@ -269,15 +241,16 @@ export default function AnalyticsDashboard() {
               <Tooltip content={<CustomTooltip />} />
               <Area
                 type="monotone"
-                dataKey="rooms"
+                dataKey="sessions"
                 stroke={COLORS.primary}
                 fillOpacity={1}
-                fill="url(#colorRooms)"
+                fill="url(#colorSessions)"
               />
             </AreaChart>
           </ChartCard>
 
-          <ChartCard title="Language Distribution">
+          {/* Language Distribution */}
+          <ChartCard title="Popular Languages">
             <PieChart>
               <Pie
                 data={data.languages}
@@ -299,51 +272,31 @@ export default function AnalyticsDashboard() {
             </PieChart>
           </ChartCard>
 
-          <ChartCard title="Daily Activity">
-            <BarChart data={data.dailyActivity}>
+          {/* Coding Time Distribution */}
+          <ChartCard title="Average Coding Time by Language">
+            <BarChart data={data.languages.map(lang => ({
+              name: lang.name,
+              avgCodingTime: lang.avgCodingTime
+            }))}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-              <XAxis 
-                dataKey="date" 
+              <XAxis dataKey="name" stroke="#9CA3AF" />
+              <YAxis 
                 stroke="#9CA3AF"
-                tickFormatter={date => new Date(date).toLocaleDateString('en-US', { 
-                  month: 'short', 
-                  day: 'numeric' 
-                })}
+                tickFormatter={(value) => formatDuration(value)}
               />
-              <YAxis stroke="#9CA3AF" />
               <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="sessions" fill={COLORS.secondary} />
+              <Bar dataKey="avgCodingTime" fill={COLORS.secondary} />
             </BarChart>
           </ChartCard>
 
+          {/* Recent Activity */}
           <ChartCard title="Recent Activity">
             <div className="space-y-4 max-h-[300px] overflow-y-auto">
-              {data.recentActivity.map((activity) => (
-                <ActivityItem key={activity.id} activity={activity} />
+              {data.activity.map((activity, index) => (
+                <ActivityItem key={index} activity={activity} />
               ))}
             </div>
           </ChartCard>
-        </div>
-
-        {/* Code Analytics Section */}
-        <div className="bg-gray-800/50 rounded-lg border border-gray-700 p-6">
-          <h3 className="text-lg font-medium mb-4">Code Analytics</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="space-y-2">
-              <p className="text-sm text-gray-400">Average Code Length</p>
-              <p className="text-2xl font-bold">{data.codeAnalytics?.averageLength || 0} lines</p>
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm text-gray-400">Total Code Written</p>
-              <p className="text-2xl font-bold">{data.codeAnalytics?.totalLines || 0} lines</p>
-            </div>
-            <div className="space-y-2">
-              <p className="text-sm text-gray-400">Most Used Language</p>
-              <p className="text-2xl font-bold">
-                {data.languages[0]?.name || 'JavaScript'}
-              </p>
-            </div>
-          </div>
         </div>
       </div>
     </div>
